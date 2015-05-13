@@ -1,0 +1,14 @@
+# definition file for a virtual corpus is text file
+# 
+# each section starts with corpus name
+# each line in a section describes one interval of tokens
+#    which are going to be included in the virtual corpus
+
+=desam
+100,1000
+5000,100000
+200000,800000
+
+=susanne
+0,10000
+50000,80000

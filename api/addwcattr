@@ -1,0 +1,52 @@
+#! /usr/bin/env python
+
+"""
+"""
+import sys
+import manatee
+import re
+
+class WordCounter:
+    def __init__(self, corpname, docname='doc', wordname='word'):
+        self.corp = manatee.Corpus(corpname)
+        self.docattr = self.corp.get_struct(docname)
+        self.wordattr = self.corp.get_attr(wordname)
+        self.nonwords = set()
+        self.format = '<%s wordcount="%%d">\nx\n</%s>' % (docname, docname)
+    
+    def wc_in_range (self, beg_pos, end_pos):
+        """counts number of words in the corpus from beg_pos to end_pos"""
+        ti = self.wordattr.posat (beg_pos)
+        wc = 0
+        while beg_pos < end_pos:
+            if ti.next() not in self.nonwords:
+                wc += 1
+            beg_pos += 1
+        return wc
+
+    def process_corpus (self):
+        rngs = self.docattr.whole()
+        while not rngs.end():
+            print self.format % self.wc_in_range (rngs.peek_beg(), 
+                                                  rngs.peek_end())
+            rngs.next()
+
+    def define_nonword (self, nonword_regexp='[^[:alpha:]].*'):
+        nws = set()
+        nonwords = self.wordattr.regexp2ids(nonword_regexp, 0)
+        while not nonwords.end():
+            nws.add(nonwords.next())
+        self.nonwords = nws
+
+if __name__ == "__main__":
+    if sys.argv[3:]:
+        wc = WordCounter (sys.argv[1], sys.argv[2])
+        wc.define_nonword (sys.argv[3])
+        wc.process_corpus()
+    else:
+        print 'usage: addwcattr.py CORPNAME DOCNAME NONWORDRE'
+        print 'example: addwcattr.py bnc bncdoc "[^[:alpha:]].*"'
+        print '            |encodevert -p /tmp/wc -a x -s bncdoc -x'
+        print '         mv /tmp/wc/bncdoc.wordcount.* `corpinfo -p bnc`'
+
+

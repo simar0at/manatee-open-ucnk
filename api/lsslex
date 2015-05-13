@@ -1,0 +1,25 @@
+#!/usr/bin/env python
+
+import manatee
+import sys
+
+if not sys.argv[3:]:
+    print 'usage: lsslex.py CORPNAME STRUCTNAME STRUCTATTR'
+    print '        lists number of tokens for all structure attribute values'
+    print 'example: lsslex.py bnc bncdoc alltyp'
+    sys.exit(1)
+
+
+corp = manatee.Corpus (sys.argv[1])
+struct = corp.get_struct (sys.argv[2])
+attrname = sys.argv[3]
+attr = struct.get_attr(attrname)
+
+for id in range(attr.id_range()):
+    r = struct.attr_val(attrname, id)
+    t = r.peek_end() - r.peek_beg()
+    while r.next():
+        t += r.peek_end() - r.peek_beg()
+    print '%s\t%s' % (t, attr.id2str(id))
+
+

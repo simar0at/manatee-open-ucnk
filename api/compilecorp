@@ -1,0 +1,536 @@
+#!/bin/bash
+
+checkprogram()
+{
+    PROGRAM="$1"
+    HINT="$2"
+    if which "$PROGRAM" >/dev/null 2>/dev/null; then
+        return 0
+    else
+        echo "$THIS: $PROGRAM not found; please make sure it's in your PATH variable" $HINT >&2
+        return 1
+    fi
+}
+
+main() 
+{
+    USAGE="Usage: $THIS [OPTIONS] CORPNAME [FILENAME]
+Creates a new corpus from a vertical text in file FILENAME or stdin.
+If possible, also creates word sketches, thesaurus, histograms and
+subcorpora. Existing components are never overwritten unless recompiling is
+explicitly requested.
+
+    --recompile-corpus      recompile the corpus and all its components
+                            (vertical file must be available, implies
+                            --recompile-sizes)
+    --recompile-sketches    recompile word sketches, thesaurus and histograms 
+                            (implies --recompile-thesaurus
+                            --recompile-histograms)
+    --recompile-thesaurus 
+    --recompile-histograms
+    --recompile-subcorpora
+    --recompile-sizes
+    --recompile-align
+
+    --no-sketches           do not compile word sketches
+                            (implies --no-thesaurus --no-histograms)
+    --no-thesaurus          do not compile thesaurus
+    --no-histograms         do not compile histograms
+    --no-subcorpora         do not compile subcorpora
+    --no-sizes              do not compile sizes
+    --no-align              do not compile alignment to parallel corpora
+    --no-parallel           do not parallelize processing
+                            (currently only sketches are parallelized)
+
+    -h, --help              print this info"
+
+    RECOMPILE_CORPUS=0
+    RECOMPILE_SKETCHES=0
+    RECOMPILE_THESAURUS=0
+    RECOMPILE_HISTOGRAMS=0
+    RECOMPILE_SUBCORPORA=0
+    RECOMPILE_SIZES=0
+    RECOMPILE_ALIGN=0
+
+    NO_SKETCHES=0
+    NO_THESAURUS=0
+    NO_HISTOGRAMS=0
+    NO_SUBCORPORA=0
+    NO_SIZES=0
+    NO_PARALLEL=0
+    NO_ALIGN=0
+
+    OPTS=`getopt -n $THIS -o h -l recompile-corpus,recompile-sketches,\
+recompile-thesaurus,recompile-histograms,recompile-subcorpora,recompile-sizes,\
+recompile-align,no-sketches,no-thesaurus,no-histograms,no-subcorpora,no-sizes,\
+no-parallel,no-align \
+-- "$@"`
+    if [ $? != 0 ]; then
+        echo "$USAGE"
+        return 1
+    fi
+
+    eval set -- "$OPTS"
+
+    while true; do
+         case $1 in
+             --recompile-corpus)     RECOMPILE_CORPUS=1;
+                                     RECOMPILE_SIZES=1;
+                                     shift;;
+             --recompile-sketches)   RECOMPILE_SKETCHES=1;
+                                     RECOMPILE_THESAURUS=1; 
+                                     RECOMPILE_HISTOGRAMS=1; 
+                                     shift;;
+             --recompile-thesaurus)  RECOMPILE_THESAURUS=1; shift;;
+             --recompile-histograms) RECOMPILE_HISTOGRAMS=1; shift;;
+             --recompile-subcorpora) RECOMPILE_SUBCORPORA=1; shift;;
+             --recompile-sizes)      RECOMPILE_SIZES=1; shift;;
+             --recompile-align)      RECOMPILE_ALIGN=1; shift;;
+             --no-sketches)   NO_SKETCHES=1;
+                              NO_THESAURUS=1;
+                              NO_HISTOGRAMS=1;
+                              shift;;
+             --no-thesaurus)  NO_THESAURUS=1; shift;;
+             --no-histograms) NO_HISTOGRAMS=1; shift;;
+             --no-subcorpora) NO_SUBCORPORA=1; shift;;
+             --no-sizes)      NO_SIZES=1; shift;;
+             --no-parallel)   NO_PARALLEL=1; shift;;
+             --no-align)      NO_ALIGN=1; shift;;
+             -h|--help) echo "$USAGE"; return 0;;
+             --) shift; break;;
+             *) echo "Internal error!"; return 1;;
+         esac
+    done
+
+    if [ $# = 0 -o $# -gt 2 ]; then
+        echo "$USAGE"
+        return 1
+    fi
+
+    # check if required programs are available
+    checkprogram encodevert || return 1
+    checkprogram corpinfo || return 1
+    checkprogram mksubc  || return 1
+    if [ $NO_SKETCHES = 0 ]; then
+        HINT="or use --no-sketches"
+        checkprogram genws "$HINT" || return 1
+        checkprogram mkwmap "$HINT" || return 1
+        checkprogram mkwmrank "$HINT" || return 1
+        checkprogram m4 "$HINT" || return 1
+    fi
+    if [ $NO_THESAURUS = 0 ]; then
+        HINT="or use --no-thesaurus"
+        checkprogram wm2thes "$HINT" || return 1
+        checkprogram mkthes "$HINT" || return 1
+    fi
+    if [ $NO_HISTOGRAMS = 0 ]; then
+        HINT="or use --no-histograms"
+        checkprogram genhist "$HINT" || return 1
+    fi
+    if [ $NO_SIZES = 0 ]; then
+        HINT="or use --no-sizes"
+        checkprogram addwcattr "$HINT" || return 1
+    fi
+    if [ $NO_ALIGN = 0 ]; then
+        HINT="or use --no-align"
+        checkprogram mkalign "$HINT" || return 1
+    fi
+
+    CORPUS="$1"
+    INPUT_FILE="$2"
+
+    # check whether the corpus exists
+    corpinfo "$CORPUS" >/dev/null || return 1
+
+    echo "Reading corpus configuration..."
+    PATH_="`corpinfo -p "$CORPUS"`"
+    VERTICAL="`corpinfo -g VERTICAL "$CORPUS"`"
+    WSDEF="`corpinfo -g WSDEF "$CORPUS"`"
+    WSHIST="`corpinfo -g WSHIST "$CORPUS"`"
+    SUBCDEF="`corpinfo -g SUBCDEF "$CORPUS"`"
+    WSBASE="`corpinfo -g WSBASE "$CORPUS"`"
+    WSATTR="`corpinfo -g WSATTR "$CORPUS"`"
+    WSTHES="`corpinfo -g WSTHES "$CORPUS"`"
+    DOCNORMS="`corpinfo -g DOCNORMS "$CORPUS" | tr "," "\n" | grep wordcount`"
+    DOCSTRUCTURE="`corpinfo -g DOCSTRUCTURE "$CORPUS"`"
+    NONWORDRE="`corpinfo -g NONWORDRE "$CORPUS"`"
+    WORDCOUNTATTR="`corpinfo -g $DOCSTRUCTURE.wordcount.TYPE "$CORPUS"`"
+    ALIGNDEF="`corpinfo -g ALIGNDEF "$CORPUS"`"
+    ALIGNED="`corpinfo -g ALIGNED "$CORPUS"`"
+
+    # print settings
+    echo "PATH=$PATH_"
+    echo "VERTICAL=$VERTICAL"
+    echo "WSDEF=$WSDEF"
+    echo "WSHIST=$WSHIST"
+    echo "SUBCDEF=$SUBCDEF"
+    echo "WSBASE=$WSBASE"
+    echo "WSATTR=$WSATTR"
+    echo "WSTHES=$WSTHES"
+    echo "DOCNORMS=$DOCNORMS"
+    echo "DOCSTRUCTURE=$DOCSTRUCTURE"
+    echo "NONWORDRE=$NONWORDRE"
+    echo "WORDCOUNTATTR=$WORDCOUNTATTR"
+    echo "ALIGNDEF=$ALIGNDEF"
+    echo "ALIGNED=$ALIGNED"
+
+    # create and store log filepath
+    PATH_="`corpinfo -p "$CORPUS"`"
+    DATETIME=`date "+%Y-%m-%d_%H%M"`
+    LOGFILE="${PATH_}log/${THIS}_$DATETIME.log"
+    echo "$LOGFILE" > "$LOGFILEPATH"
+
+    # CORPUS ###################################################################
+
+    # check whether the corpus is compiled
+    COMPILED_FILE="$PATH_/word.lex"
+    CORPUS_COMPILED=0
+    test -e "$COMPILED_FILE" && CORPUS_COMPILED=1
+
+    test $CORPUS_COMPILED = 1 && echo "Corpus is compiled"
+
+    if [ -n "$INPUT_FILE" -a $CORPUS_COMPILED = 1 -a $RECOMPILE_CORPUS = 0 ]; then
+        echo "$THIS: corpus $CORPUS is already compiled; use --recompile-corpus to recompile" >&2
+        return 1
+    fi
+
+    if [ $CORPUS_COMPILED = 1 -a $RECOMPILE_CORPUS = 0 -a \
+            "$VERTICAL" -nt "$COMPILED_FILE" ]; then
+        echo "$THIS: warning: VERTICAL file is newer than compiled data; use --recompile-corpus to recompile" >&2
+    fi
+
+    CORPUS_LOGDIR="$PATH_""log"
+    LOGDIR_BACKUP="/tmp/$THIS-log-backup-$$"
+    if [ $CORPUS_COMPILED = 0 -o $RECOMPILE_CORPUS = 1 ]; then
+        echo -n "Vertical text will be read from "
+        if [ -n "$INPUT_FILE" ]; then
+            if [ "$INPUT_FILE" = "-" ]; then
+                echo "standard input"
+            else
+                echo $INPUT_FILE
+            fi
+        else
+            if [ -n "$VERTICAL" ]; then
+                echo $VERTICAL
+            else
+                echo "standard input"
+            fi
+        fi
+
+        # (re)compile corpus
+        if [ $RECOMPILE_CORPUS = 1 ]; then
+            # back-up log
+            if [ -d "$CORPUS_LOGDIR" ]; then
+                echo "Backing-up log directory to $LOGDIR_BACKUP"
+                mv "$CORPUS_LOGDIR" "$LOGDIR_BACKUP" || return 1
+            fi
+            # delete corpus
+            echo "Deleting corpus PATH directory..."
+            RMPATH_ERROR=0
+            rm -rf "$PATH_/"* || RMPATH_ERROR=1
+            # restore log
+            if [ -d "$LOGDIR_BACKUP" ]; then
+                echo "Restoring log directory..."
+                mv "$LOGDIR_BACKUP" "$CORPUS_LOGDIR"
+            fi
+            test $RMPATH_ERROR = 1 && return 1
+        fi
+
+        echo "Compiling corpus..."
+        encodevert -c "$@" || return 1
+        echo "Compiling frequencies..."
+        mksubc "$CORPUS"
+        CORPUS_COMPILED=1
+    fi
+
+    # SUBCORPORA ################################################################
+
+    SUBCDIR="$PATH_"/subcorp/
+
+    if [ $NO_SUBCORPORA = 1 ]; then
+        echo "Compiling subcorpora disabled; skipping..."
+    elif [ $CORPUS_COMPILED = 0 ]; then
+        echo "Corpus is not compiled; skipping subcorpora..."
+    elif [ -z "$SUBCDEF" ]; then
+        echo "SUBCDEF path not specified in the configuration file; skipping subcorpora..."
+    else
+        if [ $RECOMPILE_SUBCORPORA = 1 ]; then
+            echo "Deleting existing subcorpora..."
+            rm -rf "$SUBCDIR"
+        fi
+        echo "Compiling subcorpora..."
+        mksubc "$CORPUS" "$SUBCDIR" "$SUBCDEF"
+    fi
+
+    # WORD SKETCHES ############################################################
+        
+    SKETCHES_COMPILED=0
+    COMPILED_WS_FILE="$WSBASE.lex"
+    if [ "$WSBASE" != "none" -a -e "$COMPILED_WS_FILE" ]; then
+        SKETCHES_COMPILED=1
+    fi
+
+    if [ $NO_SKETCHES = 1 ]; then
+        echo "Compiling word sketches disabled; skipping..."
+    elif [ -z "$WSDEF" ]; then
+        echo "WSDEF attribute is not set; skipping word sketches..."
+    elif [ "$WSBASE" = "none" ]; then
+        echo "WSBASE is set to none; skipping word sketches..."
+    else
+        COMPILE_SKETCHES=0
+        if [ $SKETCHES_COMPILED = 1 ]; then
+            echo "Word sketches are compiled"
+            if [ $RECOMPILE_SKETCHES = 1 ]; then
+                echo "Deleting existing sketches..."
+                rm -f "$WSBASE".* || return 1
+                COMPILE_SKETCHES=1
+            else
+                if [ "$WSDEF" -nt "$COMPILED_WS_FILE" ]; then
+                    echo "$THIS: warning: WSDEF file is newer than compiled sketches; use --recompile-sketches to recompile" >&2
+                fi
+            fi
+        else
+            COMPILE_SKETCHES=1
+        fi
+
+        if [ $COMPILE_SKETCHES = 1 ]; then
+            echo "Compiling sketches..."
+
+            # expand m4 macros
+            if [ ${WSDEF##*.} = m4 ]; then
+                echo "Expanding m4 macros in $WSDEF"
+                TMPWSDEF=/tmp/$THIS-wsdef.$$
+                m4 "$WSDEF" > "$TMPWSDEF"
+                if [ $? != 0 ]; then
+                    rm -f "$TMPWSDEF"
+                    return 1
+                fi
+                WSDEF="$TMPWSDEF"
+            fi
+
+            echo "Using word sketch definitions from $WSDEF"
+            if [ $NO_PARALLEL = 1 ]; then
+                genws "$CORPUS" "$WSATTR" "$WSBASE" "$WSDEF" | mkwmap "$WSBASE"
+            else
+                parws "$CORPUS" "$WSDEF"
+            fi
+            mkwmrank "$WSBASE"
+
+            # remove TMPWSDEF
+            rm -f "$TMPWSDEF"
+
+            # cache will get cleared
+            touch "$PATH_/"word.text
+
+            SKETCHES_COMPILED=1
+        fi
+    fi
+
+    # THESAURUS ################################################################
+
+    THESAURUS_COMPILED=0
+    COMPILED_THES_FILE="$WSTHES.idx"
+    if [ $SKETCHES_COMPILED = 1 -a -e $COMPILED_THES_FILE ]; then
+        THESAURUS_COMPILED=1
+    fi
+
+    if [ $NO_THESAURUS = 1 ]; then
+        echo "Compiling thesaurus disabled; skipping..."
+    elif [ $SKETCHES_COMPILED = 0 ]; then
+        echo "Word sketches are not compiled; skipping thesaurus..."
+    else
+        COMPILE_THESAURUS=0
+        if [ $THESAURUS_COMPILED = 1 ]; then
+            echo "Thesaurus is compiled"
+            if [ $RECOMPILE_THESAURUS = 1 ]; then
+                echo "Deleting existing thesaurus..."
+                rm -f "$WSTHES".* || return 1
+                COMPILE_THESAURUS=1
+            fi
+        else
+            COMPILE_THESAURUS=1
+        fi
+
+        if [ $COMPILE_THESAURUS = 1 ]; then
+            echo "Compiling thesaurus..."
+
+            wm2thes "$WSBASE" "$WSBASE-preth"
+            if [ $? != 0 ]; then
+                rm -f "$WSBASE-preth"*
+                return 1
+            fi
+
+            mkthes -m 300 "$WSBASE-preth" "$WSTHES"
+            if [ $? != 0 ]; then
+                rm -f "$WSBASE-preth"*
+                return 1
+            fi
+
+            rm -f "$WSBASE-preth"*
+        fi
+    fi
+
+    # HISTOGRAMS ################################################################
+
+    HISTOGRAMS_COMPILED=0
+    COMPILED_HIST_FILE=""
+    if [ $SKETCHES_COMPILED = 1 ]; then
+        COMPILED_HIST_FILE="`ls "$WSBASE"* | grep \\.hist$ | head -n1`"
+        test -n "$COMPILED_HIST_FILE" && HISTOGRAMS_COMPILED=1
+    fi
+
+    if [ $NO_HISTOGRAMS = 1 ]; then
+        echo "Compiling histograms disabled; skipping..."
+    elif [ $SKETCHES_COMPILED = 0 ]; then
+        echo "Word sketches are not compiled; skipping histograms..."
+    elif [ -z "$WSHIST" ]; then
+        echo "WSHIST attribute is not set; skipping histograms..."
+    else
+        COMPILE_HISTOGRAMS=0
+        if [ $HISTOGRAMS_COMPILED = 1 ]; then
+            echo "Histograms are compiled"
+            if [ $RECOMPILE_HISTOGRAMS = 1 ]; then
+                echo "Deleting existing histograms..."
+                # <block>
+                # this block is not space-in-path safe
+                for HIST_FILE in `ls "$WSBASE"* | grep \\.hist$`; do
+                    rm -f ${HIST_FILE%.hist}.*
+                done
+                # </block>
+                COMPILE_HISTOGRAMS=1
+            else
+                if [ "$WSHIST" -nt "$COMPILED_HIST_FILE" ]; then
+                    echo "$THIS: warning: WSHIST file is newer than compiled histograms; use --recompile-histograms to recompile" >&2
+                fi
+            fi
+        else
+            COMPILE_HISTOGRAMS=1
+        fi
+
+        if [ $COMPILE_HISTOGRAMS = 1 ]; then
+            genhist "$CORPUS" "$WSHIST" || return 1
+        fi
+    fi
+
+    # SIZES ################################################################
+
+    SIZES_COMPILED=0
+    COMPILED_SIZES_FILE="$PATH_"/sizes
+    if [ $CORPUS_COMPILED = 1 ]; then
+        [ -f $COMPILED_SIZES_FILE ] && SIZES_COMPILED=1
+    fi
+
+    if [ $NO_SIZES = 1 ]; then
+        echo "Compiling sizes disabled; skipping..."
+    elif [ $CORPUS_COMPILED = 0 ]; then
+        echo "Corpus is not compiled; skipping sizes..."
+    else
+        COMPILE_SIZES=0
+        if [ $SIZES_COMPILED = 1 ]; then
+            echo "Sizes are compiled"
+            if [ $RECOMPILE_SIZES = 1 ]; then
+                echo "Deleting existing sizes..."
+                rm -f $COMPILED_SIZES_FILE
+                COMPILE_SIZES=1
+            fi
+        else
+            COMPILE_SIZES=1
+        fi
+
+        if [ $COMPILE_SIZES = 1 ]; then
+            if [ `corpinfo -g $DOCSTRUCTURE.PATH "$CORPUS" 2>/dev/null` ]; then
+                TMPDIR=`mktemp -d /tmp/addwcattr.XXXXXXXXXX`
+                ( addwcattr "$CORPUS" "$DOCSTRUCTURE" "$NONWORDRE" |
+                  encodevert -p "$TMPDIR" -a x -s "$DOCSTRUCTURE" -x;
+                  tr '\0' '\n' < $TMPDIR/$DOCSTRUCTURE.wordcount.lex > $TMPDIR/tmp_lex
+                  od -td4 -w4 -Anone -v $TMPDIR/$DOCSTRUCTURE.wordcount.rev.cnt > $TMPDIR/tmp_revcnt
+                  mv $TMPDIR/$DOCSTRUCTURE.wordcount.* "$PATH_"
+                ) || return 1
+                [ -z "$WORDCOUNTATTR" ] && (
+                    echo "$THIS: warning: $DOCSTRUCTURE does not have attribute 'wordcount'; add the following line to the '$DOCSTRUCTURE' structure in your corpus configuration file."
+                    echo 'ATTRIBUTE "wordcount"'
+                )
+                WORDCOUNT=`paste $TMPDIR/tmp_lex $TMPDIR/tmp_revcnt |awk '{s+=$1*$2};END{print s}'`
+                echo "Removing $TMPDIR..."
+                rm -rf $TMPDIR
+                mknorms "$CORPUS" $DOCSTRUCTURE wordcount
+            else
+                echo "No document structure ($DOCSTRUCTURE) found"
+                WORDCOUNT=`lsclex -f "$CORPUS" word | cut -f2,3 | grep -v "^$NONWORDRE	" | awk -F"\t" '{SUM+=$2} END {print SUM}'`
+            fi
+            TOKENCOUNT=`corpinfo -s "$CORPUS"`
+            echo -e "tokencount $TOKENCOUNT\nwordcount $WORDCOUNT" > $COMPILED_SIZES_FILE
+            DOCCOUNT=`python -c "from manatee import Corpus; c=Corpus('$CORPUS'); print c.get_struct('$DOCSTRUCTURE').size()" 2>/dev/null`
+            [ -z $DOCCOUNT ] && DOCCOUNT=0
+            PARCOUNT=`python -c "from manatee import Corpus; c=Corpus('$CORPUS'); print c.get_struct('p').size()" 2>/dev/null`
+            [ -z $PARCOUNT ] && PARCOUNT=0
+            SENTCOUNT=`python -c "from manatee import Corpus; c=Corpus('$CORPUS'); print c.get_struct('s').size()" 2>/dev/null`
+            [ -z $SENTCOUNT ] && SENTCOUNT=0
+            echo -e "doccount $DOCCOUNT\nparcount $PARCOUNT\nsentcount $SENTCOUNT" >> $COMPILED_SIZES_FILE
+            echo "Sizes computed."
+        fi
+    fi
+
+    # ALIGNMENT OF PARALLEL CORPORA #############################################
+
+    if [ $NO_ALIGN = 1 ]; then
+        echo "Compiling alignment disabled; skipping..."
+    elif [ $CORPUS_COMPILED = 0 ]; then
+        echo "Corpus is not compiled; skipping alignment..."
+    elif [ -z "$ALIGNED" ]; then
+        echo "No parallel corpora specified in ALIGNED; skipping alignment..."
+    elif [ -z "$ALIGNDEF" ]; then
+        echo "No alignment specified in ALIGNDEF; skipping alignment..."
+    else
+        ALIGNDEFS=(`echo $ALIGNDEF | sed 's/,/ /g'`)
+        ALIGNS=(`echo $ALIGNED | sed 's/,/ /g'`)
+        if [ ${#ALIGNDEFS[*]} != ${#ALIGNS[*]} ]; then
+            echo "Number of alignment definitions in ALIGNDEF does not match number of aligned corpora in ALIGNED; skipping alignment..."
+        else
+            if [ $RECOMPILE_ALIGN = 1 ]; then
+                echo "Deleting existing alignments..."
+                rm -rf "$PATH_"/align.*
+            fi
+            for I in `seq 0 ${#ALIGNDEFS[*]} | head -n -1`; do
+                echo -n "Compiling alignment for corpus ${ALIGNS[$I]}..."
+                if [ -f $PATH_/align.${ALIGNS[$I]} ]; then
+                    echo " already compiled; skipping..."
+                else
+                    mkalign ${ALIGNDEFS[$I]} $PATH_/align.${ALIGNS[$I]}
+                    echo " done."
+                fi
+            done
+        fi
+    fi
+
+    # CHECK IF ALL OK ###########################################################
+    if [ ! -d "$PATH_" ]; then
+        echo "$THIS: warning: PATH dir ($PATH_) not created" >&2
+    else
+        TMPFILES=`ls -1 "$PATH_" | grep '#' | grep -v '^wsdef#' | grep -v '\.log$'`
+        if [ "$TMPFILES" ]; then
+            echo "$THIS: warning: temporary files left in the PATH dir ($PATH_):" >&2
+            echo $TMPFILES >&2
+        fi
+    fi
+}
+
+THIS=`basename $0`
+# the file in which the filepath to the logfile is stored
+LOGFILEPATH="/tmp/$THIS-logfile_path.$$"
+TMPLOGFILE="/tmp/$THIS-log.$$"
+
+echo "$@" > "$TMPLOGFILE"
+main "$@" 2>&1 | tee "$TMPLOGFILE"
+
+if [ -f "$LOGFILEPATH" ]; then
+    LOGFILE="`cat "$LOGFILEPATH"`"
+    echo "Writing log to $LOGFILE"
+    if mkdir -p "`dirname "$LOGFILE"`"; then
+        mv "$TMPLOGFILE" "$LOGFILE"
+    fi
+fi
+
+rm -f "$TMPLOGFILE" "$LOGFILEPATH"
+
+# vim: ts=4 sw=4 sta et sts=4 si tw=80:

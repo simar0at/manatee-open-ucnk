@@ -1,0 +1,41 @@
+###############################################################################
+# Subcorpus definition file
+###############################################################################
+#
+# Subcorpora can be created by users in their own name space,
+# each user have own subcorpora and cannot access subcorpora of
+# other users.
+# To share common subcorpora, it is possible to create a list of
+# subcorpora which are accessible by all users. 
+# This file defines subcorpora names and respective subqueries.
+#
+# 
+# Subcorpus definition format
+# ----------------------------
+# *FREQLISTATTRS attr1 attr2
+#
+# =subcorpus_id
+#   structure
+#   sub-query
+#
+# FREQLISTATTRS specifies a list of attributes for which frequecy
+# lists should be precomputed.
+#
+# Sub-query is a part of a corpus query which can be used in 
+# "within <structure>" clause.  It can consist of and/or combination
+# of attribute-value pairs.
+#
+# All strings starting with # are comments and are ignored to the end of line.
+#
+###############################################################################
+
+*FREQLISTATTRS word lemma lempos
+
+=spoken
+  bncdoc
+  alltyp="Spoken context-governed" | alltyp="Spoken demographic"
+
+
+=book60
+  bncdoc
+  alltim="1960-1974" & wrimed="Book"

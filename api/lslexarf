@@ -1,0 +1,17 @@
+#!/usr/bin/env python
+
+from manatee import findPosAttr, compute_ARF
+
+def list_lex_with_ARF (attr):
+    size = attr.size()
+    for i in range (0, attr.id_range()):
+        f = attr.freq(i)
+        print '%d\t%s\t%d\t%f' % (i, attr.id2str(i), f,
+                                  compute_ARF (attr.id2poss(i), f, size))
+
+if __name__ == '__main__':
+    import sys
+    if sys.argv[2:]:
+        list_lex_with_ARF (findPosAttr (sys.argv[1], sys.argv[2]))
+    else:
+        print 'usage: lsclexarf.py CORPNAME ATTRNAME'
