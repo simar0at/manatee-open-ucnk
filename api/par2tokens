@@ -1,0 +1,95 @@
+#!/usr/bin/python
+# Copyright (c) 2014  Milos Jakubicek
+
+import sys
+from os.path import basename
+from manatee import Corpus, new_TokenLevel, full_level, MLTStream
+
+def print_aligned (outf, freqs1, freqs2, al1_attr, al2_attr, al1_begpos, al1_endpos, al2_begpos, al2_endpos):
+    al1_it = al1_attr.textat (al1_begpos)
+    al2_it = al2_attr.textat (al2_begpos)
+    al1_tokens = [al1_it.next() for i in xrange (al1_endpos - al1_begpos)]
+    al2_tokens = [al2_it.next() for i in xrange (al2_endpos - al2_begpos)]
+    for al1_token in al1_tokens:
+        freqs1 [al1_token] = freqs1.get (al1_token, 0) + 1
+    for al2_token in al2_tokens:
+        freqs2 [al2_token] = freqs2.get (al2_token, 0) + 1
+    for al1_token in al1_tokens:
+        for al2_token in al2_tokens:
+            outf.write("%s\t%s\n" % (al1_token, al2_token))
+
+def process_MLTStream (al1_struc, al2_struc, map_file):
+    mlts = full_level (new_TokenLevel (map_file))
+    while not mlts.end():
+        al1_num = mlts.orgpos()
+        al2_num = mlts.newpos()
+        if mlts.change_type() == MLTStream.KEEP:
+            for i in xrange(mlts.change_size()): # change_size = change_newsize
+                al1_begpos = al1_struc.beg (al1_num)
+                al1_endpos = al1_struc.end (al1_num)
+                al2_begpos = al2_struc.beg (al2_num)
+                al2_endpos = al2_struc.end (al2_num)
+                yield (al1_begpos, al1_endpos, al2_begpos, al2_endpos)
+                al1_num += 1
+                al2_num += 1
+        elif mlts.change_type() == MLTStream.MORPH:
+            al1_begpos = al1_struc.beg (al1_num)
+            al1_endpos = al1_struc.end (al1_num + mlts.change_size())
+            al2_begpos = al2_struc.beg (al2_num)
+            al2_endpos = al2_struc.end (al2_num + mlts.change_newsize())
+            yield (al1_begpos, al1_endpos, al2_begpos, al2_endpos)
+        mlts.next()
+
+def process_OneToOne (al1_struc, al2_struc):
+    for i in xrange(min(al1_struc.size(), al2_struc.size())):
+        al1_begpos = al1_struc.beg (i)
+        al1_endpos = al1_struc.end (i)
+        al2_begpos = al2_struc.beg (i)
+        al2_endpos = al2_struc.end (i)
+        yield (al1_begpos, al1_endpos, al2_begpos, al2_endpos)
+
+def par2tokens (al1, al2, al1_attrname, al2_attrname, out_tokenfile, out_freq1file, out_freq2file, map_file=None):
+    al1_struc = al1.get_struct (al1.get_conf ("ALIGNSTRUCT"))
+    al2_struc = al2.get_struct (al2.get_conf ("ALIGNSTRUCT"))
+    al1_attr = al1.get_attr (al1_attrname)
+    al2_attr = al2.get_attr (al2_attrname)
+    freqs1 = {}
+    freqs2 = {}
+    if map_file:
+        ranges = process_MLTStream(al1_struc, al2_struc, map_file)
+    else:
+        ranges = process_OneToOne(al1_struc, al2_struc)
+    for al1_begpos, al1_endpos, al2_begpos, al2_endpos in ranges:
+        print_aligned(out_tokenfile, freqs1, freqs2, al1_attr, al2_attr, al1_begpos, al1_endpos, al2_begpos, al2_endpos)
+    for al1_token, freq in freqs1.items():
+        out_freq1file.write ("%s\t%d\n" % (al1_token, freq))
+    for al2_token, freq in freqs2.items():
+        out_freq2file.write ("%s\t%d\n" % (al2_token, freq))
+
+if __name__ == "__main__":
+    if len(sys.argv) < 5:
+        print """Usage: %s <SRC_CORPUS> <DST_CORPUS> <SRC_ATTR> <DST_ATTR> <OUTPATH>
+Extracts aligned tokens on <SRC_ATTR> and <DST_ATTR> attribute from two aligned
+corpora using mapping from <SRC_CORPUS> to <DST_CORPUS>.
+Creates 3 files:
+ <OUTPATH>.align - aligned token pairs, one tab separated pair per line
+ <OUTPATH>.srcfrq - frequencies for tokens in alignments of <SRC_CORPUS>
+ <OUTPATH>.dstfrq - frequencies for tokens in alignments of <DST_CORPUS>""" \
+    % sys.argv[0]
+        sys.exit(1)
+    al1 = Corpus (sys.argv[1])
+    al2 = Corpus (sys.argv[2])
+    path = sys.argv[5]
+    out_tokenfile = open (path + ".align", "w")
+    out_freq1file = open (path + ".srcfrq", "w")
+    out_freq2file = open (path + ".dstfrq", "w")
+    if al1.get_conf('ALIGNDEF'): # m:n
+        map_file = "%s/align.%s" % (al1.get_conf("PATH"), basename(sys.argv[2]))
+        par2tokens(al1, al2, sys.argv[3], sys.argv[4], out_tokenfile, out_freq1file, out_freq2file, map_file)
+    else: # 1:1
+        par2tokens(al1, al2, sys.argv[3], sys.argv[4], out_tokenfile, out_freq1file, out_freq2file)
+    out_tokenfile.close()
+    out_freq1file.close()
+    out_freq2file.close()
+
+# vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

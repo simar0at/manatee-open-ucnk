@@ -1,8 +1,9 @@
-/* Copyright (c) 1999-2013  Pavel Rychly        */
+// Copyright (c) 1999-2014  Pavel Rychly, Milos Jakubicek
 
 #include <string.h>
 #include <ctype.h>
 #include <locale.h>
+#include <iconv.h>
 
 const char * getnchar (const char* x, int n)
 {
@@ -48,7 +49,7 @@ const char * getnextchars (const char* x, const char attr, int len)
 
 const char * getfirstn (const char* x, int len)
 {
-    static size_t ressize = 32;
+    static int ressize = 32;
     static char *result = (char *) malloc(ressize);
     if (len < 0)
         len = 0;
@@ -61,6 +62,19 @@ const char * getfirstn (const char* x, int len)
     return result;
 }
 
+const char * getnbysep (const char* x, const char sep, int n)
+{
+    const char *p;
+    while ((p = strchr (x, sep))) {
+        if (--n)
+            x = p + 1;
+        else
+            break;
+    }
+    if (!p) return (n == 1) ? x : "";
+    return getfirstn (x, p - x);
+}
+
 const char * getfirstbysep (const char* x, const char sep)
 {
     const char *p = strchr (x, sep);
@@ -70,10 +84,10 @@ const char * getfirstbysep (const char* x, const char sep)
 
 const char * getlastn (const char* x, int len)
 {
-    size_t x_len = strlen(x);
+    int x_len = strlen(x);
     if (x_len <= len)
         return x;
-    static size_t ressize = 32;
+    static int ressize = 32;
     static char *result = (char *) malloc(ressize);
     if (len < 0)
         len = 0;
@@ -118,13 +132,17 @@ const char * url2domain (const char* url, int level)
 {
     static char *result = NULL;
     static size_t ressize = 0;
-    if (!strncmp(url, "http://", 7))
-        url += 7;
+    const char *firstslash = strchr (url, '/');
+    if (firstslash && firstslash != url &&
+        *(firstslash - 1) == ':' && *(firstslash + 1) == '/')
+        url = firstslash + 2; // skip protocol name
     if (!strncmp(url, "www.", 4))
         url += 4;
     const char *end = url;
     while (*end && *end != '/')
         end++;
+    while (end != url && (isdigit (*(end - 1)) || *(end - 1) == ':'))
+        end--; // skip port number
     const char *beg = (level ? end : url);
     while (level--) {
         if (beg != url)
@@ -141,6 +159,28 @@ const char * url2domain (const char* url, int level)
     }
     strncpy (result, beg, len);
     result[len] = '\0';
+    return result;
+}
+
+const char * ascii (const char *x, const char *encoding, const char *locale)
+{
+    const char *prev_locale = setlocale (LC_CTYPE, locale);
+    static iconv_t iconv_h = (iconv_t) -1;
+    static char enc[32] = "";
+    if (iconv_h == (iconv_t) -1 || strcmp (enc, encoding))
+        iconv_h = iconv_open ("ASCII//TRANSLIT", encoding);
+    static size_t ressize = 32;
+    static char *result = (char *) malloc(ressize);
+    size_t len = strlen (x);
+    if (ressize <= len) {
+        ressize = len + 1;
+        result = (char *) realloc (result, ressize);
+    }
+    char *in = (char*) x, *out = result;
+    size_t in_len = len, out_len = ressize;
+    iconv (iconv_h, &in, &in_len, &out, &out_len);
+    result [ressize - out_len] = '\0';
+    setlocale (LC_CTYPE, prev_locale);
     return result;
 }
 

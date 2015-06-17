@@ -1,4 +1,4 @@
-//  Copyright (c) 2007-2012  Pavel Rychly
+//  Copyright (c) 2007-2012  Pavel Rychly, Milos Jakubicek
 
 #include "corpus.hh"
 #include "frsop.hh"
@@ -48,11 +48,23 @@ public:
 
 Corpus *Corpus::get_aligned (const string &corp_name)
 {
-    for (int c = 0; c < aligned.size(); c++)
-        if (aligned[c].first == corp_name) {
-            if (!aligned[c].second)
-                aligned[c].second = new Corpus (corp_name);
-            return aligned[c].second;
+    for (unsigned c = 0; c < aligned.size(); c++)
+        if (aligned[c].corp_name == corp_name) {
+            if (!aligned[c].corp)
+                aligned[c].corp = new Corpus (corp_name);
+            return aligned[c].corp;
+        }
+    throw CorpInfoNotFound (corp_name + " not aligned");
+}
+
+TokenLevel *Corpus::get_aligned_level (const string &corp_name)
+{
+    const string levelfile = get_conf ("PATH") + "align." + corp_name;
+    for (unsigned c = 0; c < aligned.size(); c++)
+        if (aligned[c].corp_name == corp_name) {
+            if (!aligned[c].level)
+                aligned[c].level = new_TokenLevel (levelfile);
+            return aligned[c].level;
         }
     throw CorpInfoNotFound (corp_name + " not aligned");
 }
@@ -60,8 +72,8 @@ Corpus *Corpus::get_aligned (const string &corp_name)
 RangeStream *Corpus::map_aligned (Corpus *al_corp, RangeStream *src)
 {
     int corp_num = -1;
-    for (int i = 0; i < aligned.size(); i++)
-        if (aligned[i].second == al_corp) {
+    for (unsigned i = 0; i < aligned.size(); i++)
+        if (aligned[i].corp == al_corp) {
             corp_num = i;
             break;
         }
@@ -73,7 +85,7 @@ RangeStream *Corpus::map_aligned (Corpus *al_corp, RangeStream *src)
     Structure *als = al_corp->get_struct(al_corp->get_conf("ALIGNSTRUCT"));
     FastStream *snums = new StructNums(als->rng, src);
     if (! al_corp->get_conf("ALIGNDEF").empty()) 
-        snums = tolevelfs (al_corp->get_conf("PATH") +"align."+ get_conffile(),
+        snums = tolevelfs (al_corp->get_aligned_level (get_conffile()),
                            snums);
     return get_struct(get_conf("ALIGNSTRUCT"))->rng->part (snums);
 }

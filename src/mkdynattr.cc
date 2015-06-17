@@ -1,7 +1,8 @@
-// Copyright (c) 2001-2008  Pavel Rychly
+// Copyright (c) 2001-2015  Pavel Rychly, Milos Jakubicek
 
 #include <finlib/writelex.hh>
 #include <finlib/consumer.hh>
+#include <finlib/revidx.hh>
 #include "dynfun.hh"
 #include "posattr.hh"
 #include "corpconf.hh"
@@ -59,35 +60,37 @@ int main (int argc, char **argv)
     try {
         CorpInfo *ci = loadCorpInfo (argv[1]);
         string attr = argv[2];
+        string path = ci->opts["PATH"];
         int dotidx = attr.find ('.');
+        string struct_name = "";
+        string attr_name = attr;
         if (dotidx >= 0) {
             // struct_name.attr_name
-            string struct_name (attr, 0, dotidx);
-            attr = string (attr, dotidx +1);
-            ci = ci->find_struct (struct_name);
+            struct_name = string (attr, 0, dotidx);
+            path = ci->find_struct (struct_name)->opts["PATH"];
+            struct_name += ".";
+            attr_name = string (attr, dotidx +1);
         }
         CorpInfo::MSS ao = ci->find_attr (attr);
         DynFun *fun = createDynFun (ao["FUNTYPE"].c_str(), 
                     ao["DYNLIB"].c_str(), ao["DYNAMIC"].c_str(),
                     ao["ARG1"].c_str(), ao["ARG2"].c_str());
-        string path = ci->opts["PATH"] + attr;
-        PosAttr *at = findPosAttr (ci, ao["FROMATTR"]);
+        path += attr_name;
+        PosAttr *at = findPosAttr (ci, struct_name + ao["FROMATTR"]);
         bool multival = ci->str2bool (ao["MULTIVALUE"]);
         char *multisep = NULL;
         if (multival)
             multisep = strdup (ao["MULTISEP"].c_str());
         delete ci;
 
-        { // delete existing lexicons
-        ToFile<int> lex (path + ".lex");
-        ToFile<int> lexidx (path + ".lex.idx");
-        ToFile<int> lexsrt (path + ".lex.srt");
-        }
         long lexicon_size = 500000;
         if (!ao["LEXICONSIZE"].empty())
             lexicon_size = atol (ao["LEXICONSIZE"].c_str());
-        write_lexicon wl (path, lexicon_size);
+        write_lexicon wl (path, lexicon_size, false);
         RevFileConsumer *rev = RevFileConsumer::create (path);
+        ToFile<lexpos> *ridx = NULL;
+        if (!multival)
+            ridx = new ToFile<lexpos>(path + ".lex.ridx");
         
         int id, id_range = at->id_range();
         int did;
@@ -99,10 +102,30 @@ int main (int argc, char **argv)
             rev->put (did, id);
             if (multival)
                 store_multival (id, str, multisep, wl, rev);
+            else
+                ridx->put(did);
         }
         delete rev;
-        delete at;
         delete fun;
+        delete ridx;
+        if (ao["DYNTYPE"] == "freq") {
+            ToFile<int64_t> frqf (path + ".freq");
+            map_delta_revidx revf (path);
+            for (id = 0; id < revf.maxid(); id++) {
+                NumOfPos count = 0;
+                FastStream *fs = revf.id2poss (id);
+                while (fs->peek() < fs->final())
+                    count += at->freq (fs->next());
+                delete fs;
+                frqf.put (count);
+            }
+        } else if (id_range > 100 * wl.size())
+            cerr << "warning: the ratio between the dynamic attribute lexicon"
+                 << " and original lexicon is more than 1:100\nconsider"
+                 << " changing DYNTYPE to 'freq'\n"
+                 << "Source attribute lexicon size: " << id_range << "\n"
+                 << "Dynamic attribute lexicon size: " << wl.size() << "\n";
+        delete at;
     } catch (exception &e) {
         cerr << "error: " << e.what() << '\n';
         return 1;

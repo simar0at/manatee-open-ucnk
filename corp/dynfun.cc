@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2014  Pavel Rychly
 
 #include "dynfun.hh"
 #include "utf8.hh"
@@ -25,6 +25,10 @@ const unsigned char * utf8lowercase (const unsigned char *src)
     return utf8_tolower (src);
 }
 
+const unsigned char * utf8uppercase (const unsigned char *src)
+{
+    return utf8_toupper (src);
+}
 
 #define DEFFN(x) {#x, (void *)x}
 static fun_item internal_funs [] = {
@@ -33,12 +37,16 @@ static fun_item internal_funs [] = {
     DEFFN(getnextchars),
     DEFFN(getfirstn),
     DEFFN(getfirstbysep),
+    DEFFN(getnbysep),
     DEFFN(getlastn),
     DEFFN(utf8getlastn),
     DEFFN(striplastn),
     DEFFN(lowercase),
     DEFFN(utf8lowercase),
+    DEFFN(utf8uppercase),
+    DEFFN(utf8capital),
     DEFFN(url2domain),
+    DEFFN(ascii),
     {NULL, NULL}
 };
 #undef DEFFN

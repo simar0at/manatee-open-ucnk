@@ -1,4 +1,4 @@
-//  Copyright (c) 2002-2011  Pavel Rychly
+//  Copyright (c) 2002-2015  Pavel Rychly, Milos Jakubicek
 
 #ifndef SUBCORP_HH
 #define SUBCORP_HH
@@ -12,19 +12,20 @@ private:
 protected:
     ranges *subcorp;
 public:
-    SubCorpus (const Corpus *corp, const std::string &sub);
+    const bool complement;
+    SubCorpus (const Corpus *corp, const std::string &sub,
+               bool complement = false);
     virtual ~SubCorpus ();
     virtual RangeStream *filter_query (RangeStream *s);
+    virtual IDPosIterator *filter_idpos (IDPosIterator *it);
     virtual NumOfPos search_size();
     virtual std::string get_info();
-    virtual NumOfPos compute_docf(FastStream *poss, RangeStream *struc);
 };
 
-void save_subcorpus (const char *subcpath, FastStream *src, Corpus *corp, 
-                     ranges *struc);
-SubCorpus *create_subcorpus (const char *subcdir, const std::string &corpname,
-                             const std::string &subcname, 
-                             FastStream *src, Corpus *corp, ranges *struc);
+bool create_subcorpus (const char *subcpath, RangeStream *r,
+                       Structure *s = NULL);
+bool create_subcorpus (const char *subcpath, Corpus *corp,
+                       const char *structname, const char *query);
 void find_subcorpora (const char *subcdir, std::map<std::string,
                       std::pair<std::string,std::string> > &scs);
 

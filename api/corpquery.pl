@@ -1,4 +1,5 @@
 #!/usr/bin/perl -w
+# Copyright 2007-2013  Pavel Rychly
 
 use manatee;
 

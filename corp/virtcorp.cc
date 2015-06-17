@@ -1,9 +1,10 @@
-//  Copyright (c) 2004-2011  Pavel Rychly
+//  Copyright (c) 2004-2014  Pavel Rychly, Milos Jakubicek
 
 #include "corpus.hh"
 #include "virtcorp.hh"
 #include <finlib/lexicon.hh>
 #include <finlib/regexplex.hh>
+#include <finlib/log.hh>
 #include <fstream>
 #include <iostream>
 
@@ -18,6 +19,8 @@ VirtualCorpus* setup_virtcorp (const string &filename)
     VirtualCorpus::Segment empty_segment;
     Position lastpos = 0;
     ifstream in_file (filename.c_str());
+    if (in_file.fail())
+        throw FileAccessError (filename, ": could not open file");
     string line;
     while (getline (in_file, line)) {
 	if (line.length() == 0 || line[0] == '#')
@@ -34,18 +37,31 @@ VirtualCorpus* setup_virtcorp (const string &filename)
             seg->corp = new Corpus (line);
         } else {
             if (! seg) {
-                cerr << filename << ": transition without corpus:" << line << '\n';
+                CERR << filename << ": transition without corpus:" << line << '\n';
                 continue;
             }
             string::size_type cidx = line.find(',');
 	    if (cidx == line.npos) {
-                cerr << filename << ": expecting `,': " << line << '\n';
+                CERR << filename << ": expecting `,': " << line << '\n';
                 continue;
             }
             Position fromp = atoll (string (line, 0, cidx).c_str());
-            Position top = atoll (string (line, cidx +1).c_str());
+            string to (line, cidx +1);
+            Position top;
+            NumOfPos size = seg->corp->size();
+            if (to == "$")
+                top = size;
+            else {
+                top = atoll (to.c_str());
+                if (top > size) {
+                    CERR << filename << ": transition exceeds corpus size: "
+                         << line << "\n-- using corpus size (" << size
+                         << ") instead.\n";
+                    top = size;
+                }
+            }
             if (fromp >= top) {
-                cerr << filename << ": empty transition: " << line << '\n';
+                CERR << filename << ": empty transition: " << line << '\n';
                 continue;
             }
             seg->postrans.push_back(VirtualCorpus::PosTrans(fromp, lastpos));
@@ -57,7 +73,7 @@ VirtualCorpus* setup_virtcorp (const string &filename)
         seg->postrans.push_back(VirtualCorpus::PosTrans(100000000000LL, 
                                                         lastpos));
     else
-        cerr << filename << ": empty virtual corpus\n";
+        CERR << filename << ": empty virtual corpus\n";
     return vc;
 }
 
@@ -69,6 +85,9 @@ static const char* n2str (int num, const char *suffix)
     return str;
 }
 
+template <class NormClass=MapBinFile<int64_t>,
+          class FreqClass=MapBinFile<uint32_t>,
+          class FloatFreqClass=MapBinFile<float> >
 class VirtualPosAttr : public PosAttr
 {
 protected:
@@ -92,13 +111,18 @@ protected:
     MapBinFile<int64_t> freqs;
     friend class CombineFS;
     friend class IDIter;
+    NormClass *normf;
+    FreqClass *docff;
+    FloatFreqClass *arff, *aldff;
 
 public:
     VirtualPosAttr (const string &path, const string &name, 
                     const vector<VirtualCorpus::Segment> &corpsegs,
+                    const string &locale, const string &enc,
                     bool ownedByCorpus = true)
-        : PosAttr (path, name), lex (path), segs(corpsegs.size()),
-          freqs (path + ".frq")
+        : PosAttr (path, name, locale, enc), lex (path), segs(corpsegs.size()),
+          freqs (path + ".frq"), normf (NULL), docff (NULL), arff (NULL),
+          aldff (NULL)
     {
         for (size_t i = 0; i < segs.size(); i++) {
             Segment* s=&segs[i];
@@ -108,8 +132,21 @@ public:
             s->postrans = &corpsegs[i].postrans;
             s->ownedByCorpus = ownedByCorpus;
         }
+        try {
+            normf = new NormClass (path + ".norm");
+        } catch (FileAccessError) {}
+        try {
+            docff = new FreqClass (path + ".docf");
+        } catch (FileAccessError) {}
+        try {
+            arff = new FloatFreqClass (path + ".arf");
+        } catch (FileAccessError) {}
+        try {
+            aldff = new FloatFreqClass (path + ".aldf");
+        } catch (FileAccessError) {}
     }
-    virtual ~VirtualPosAttr() {}
+    virtual ~VirtualPosAttr()
+        {delete normf; delete docff; delete arff; delete aldff;}
 protected:
     Position locate_tran (Position pos, size_t &segnum, size_t &trannum) {
         // locate transition containing newpos pos, returns original position
@@ -137,7 +174,7 @@ protected:
             Position org = vpa->locate_tran (pos, sg, tr);
             if (org >= 0) {
                 curr = vpa->segs[sg].src->posat (org);
-                toread = pos - (*vpa->segs[sg].postrans)[tr+1].newpos;
+                toread = (*vpa->segs[sg].postrans)[tr+1].newpos - pos;
             }
         }
         virtual ~IDIter() {
@@ -159,8 +196,8 @@ protected:
                 }
                 curr = vpa->segs[sg].src->posat 
                     ((*vpa->segs[sg].postrans)[tr].orgpos);
-                toread = (*vpa->segs[sg].postrans)[tr].newpos 
-                    - (*vpa->segs[sg].postrans)[tr+1].newpos;
+                toread = (*vpa->segs[sg].postrans)[tr+1].newpos
+                    - (*vpa->segs[sg].postrans)[tr].newpos;
             }
             toread--;
             return (*vpa->segs[sg].tonewid)[curr->next()];
@@ -177,7 +214,7 @@ protected:
             Position org = vpa->locate_tran (pos, sg, tr);
             if (org >= 0) {
                 curr = vpa->segs[sg].src->textat (org);
-                toread = pos - (*vpa->segs[sg].postrans)[tr+1].newpos;
+                toread = (*vpa->segs[sg].postrans)[tr+1].newpos - pos;
             }
         }
         virtual ~TextIter() {
@@ -199,8 +236,8 @@ protected:
                 }
                 curr = vpa->segs[sg].src->textat 
                     ((*vpa->segs[sg].postrans)[tr].orgpos);
-                toread = (*vpa->segs[sg].postrans)[tr].newpos 
-                    - (*vpa->segs[sg].postrans)[tr+1].newpos;
+                toread = (*vpa->segs[sg].postrans)[tr+1].newpos
+                    - (*vpa->segs[sg].postrans)[tr].newpos;
             }
             toread--;
             return curr->next();
@@ -311,6 +348,9 @@ public:
         return segs[sg].src->pos2str (orgpos);
     }
     virtual IDIterator *posat (Position pos) {return new IDIter (this, pos);}
+    virtual IDPosIterator *idposat (Position pos)
+        {return new IDPosIterator (new IDIter (this, pos),
+                                   new SequenceStream (pos, size()-1, size()));}
     virtual TextIterator *textat (Position pos) {return new TextIter (this, pos);}
     virtual FastStream *id2poss (int id) {
         vector<FastStream*> fss;
@@ -334,16 +374,20 @@ public:
                                         const char *filter) 
         {return ::regexp2ids (lex, pat, locale, encoding, ignorecase, filter);}
     virtual NumOfPos freq (int id) {return freqs [id];}
-    virtual NumOfPos norm (int id) {return freqs [id];} // XXX use norm
+    virtual NumOfPos docf (int id) {return docff ? (*docff)[id] : -1LL;}
+    virtual float arf (int id) {return arff ? (*arff)[id] : -1LL;}
+    virtual float aldf (int id) {return aldff ? (*aldff)[id] : -1LL;}
+    virtual NumOfPos norm (int id) {return normf ? (*normf)[id] : freq (id);}
     virtual NumOfPos size () {return segs.back().postrans->back().newpos;}
 };
 
 
 
 PosAttr* setup_virtposattr (VirtualCorpus *vc, const string &path,
-                            const string &name, bool ownedByCorpus)
+                            const string &name, const std::string &loc,
+                            const std::string &enc, bool ownedByCorp)
 {
-    return new VirtualPosAttr (path, name, vc->segs, ownedByCorpus);
+    return new VirtualPosAttr<> (path, name, vc->segs, loc, enc, ownedByCorp);
 }
 
 // vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

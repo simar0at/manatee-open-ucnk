@@ -1,4 +1,4 @@
-//  Copyright (c) 2003-2010  Pavel Rychly
+//  Copyright (c) 2003-2014  Pavel Rychly, Milos Jakubicek
 
 #include "parsop.hh"
 
@@ -20,10 +20,17 @@ void RQFilterPos::locate()
     do {
         lab.clear();
         src->add_labels (lab);
-        int id1 = attr1->pos2id (lab [arg1]);
-        int id2 = attr2->pos2id (lab [arg2]);
-        if (op == F_EQ && id1 == id2) break;
-        if (op == F_NEQ && id1 != id2) break;
+        if (attr1 == attr2) {
+            int id1 = attr1->pos2id (lab [arg1]);
+            int id2 = attr2->pos2id (lab [arg2]);
+            if (op == F_EQ && id1 == id2) break;
+            if (op == F_NEQ && id1 != id2) break;
+        } else {
+            int cmp = strcmp (attr1->pos2str (lab [arg1]),
+                              attr2->pos2str (lab [arg2]));
+            if (op == F_EQ && !cmp) break;
+            if (op == F_NEQ && cmp) break;
+        }
     } while ((active = src->next()));
 }
 

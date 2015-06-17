@@ -1,4 +1,4 @@
-//  Copyright (c) 2012  Pavel Rychly
+//  Copyright (c) 2012  Pavel Rychly, Milos Jakubicek
 
 #ifndef PAUNIQATTR_HH
 #define PAUNIQATTR_HH

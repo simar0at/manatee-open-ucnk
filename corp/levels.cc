@@ -1,14 +1,11 @@
-//  Copyright (c) 2010-2013  Pavel Rychly
+//  Copyright (c) 2010-2013  Pavel Rychly, Milos Jakubicek
 //  Multi Level Tokenization
 
 #include "levels.hh"
-#include "corpus.hh"
 #include "posattr.hh"
-#include <finlib/fstream.hh>
+#include <finlib/frstream.hh>
 #include <finlib/binfile.hh>
 #include <finlib/bitio.hh>
-#include <fstream>
-#include <iostream>
 
 using namespace std;
 
@@ -174,12 +171,9 @@ public:
     RangeStream *tobase (RangeStream *rs);
 };
 
-
-MLTStream *full_level(const string &filename)
-{
-    TokenLevel *tl = new TokenLevel(filename);
-    return tl->full();
-}
+MLTStream *full_level (TokenLevel *level) {return level->full();}
+TokenLevel *new_TokenLevel (const string &path) {return new TokenLevel (path);}
+void delete_TokenLevel (TokenLevel *level) {delete level;}
 
 class ToLevelFStream: public FastStream {
 protected:
@@ -191,13 +185,8 @@ protected:
     void locate() {
         Position speek = src->peek();
         Position changeend;
-        //cerr << "ToLevelFS:locate src->peek=" << speek << '\n';
         levels->find_org(speek);
         while (!levels->end()) {
-            //cerr << "ToLevelFS:locate levels: " << levels->change_type()
-            //     << ':' << levels->orgpos() << '+' << levels->change_size()
-            //     << " - " << levels->newpos() <<'+'<< levels->change_newsize()
-            //     << '\n';
             switch (levels->change_type()) { 
             case MLTStream::KEEP:
                 curr = speek - levels->orgpos() + levels->newpos();
@@ -221,6 +210,8 @@ protected:
                 if (curr < levels->newpos())
                     curr = levels->newpos();
                 return;
+            case MLTStream::CONCAT: // prevent warning
+                break;
             }
         }
         curr = levels->newfinal();
@@ -232,10 +223,7 @@ public:
         : level(lev), levels(lev->full()), src(src), curr(src->peek()) {
         locate();
     }
-    virtual ~ToLevelFStream() {
-        delete src; delete levels;
-        if (level) delete level;
-    }
+    virtual ~ToLevelFStream() {delete src; delete levels;}
     virtual void add_labels (Labels &lab) {src->add_labels(lab);}
     virtual Position peek() {return curr;}
     virtual Position next() {
@@ -259,9 +247,9 @@ public:
 
 
 
-FastStream *tolevelfs (const string &levelfile, FastStream *src)
+FastStream *tolevelfs (TokenLevel *level, FastStream *src)
 {
-    return new ToLevelFStream (new TokenLevel (levelfile), src);
+    return new ToLevelFStream (level, src);
 }
 
 //------------------- LevelPosAttr ------------------------
@@ -294,7 +282,7 @@ protected:
         NumOfPos toread; //how many positions to the end of current change
     public:
         TextIter (MLTStream *mlts, TextIterator *src, LevelPosAttr *attr) 
-            : mlts(mlts), src(src), toread(0), attr(attr) {}
+            : mlts(mlts), src(src), attr(attr), toread(0) {}
         virtual ~TextIter() {
             delete src;
             delete mlts;
@@ -380,8 +368,7 @@ public:
         // ls.change_type() == MLTStream::KEEP
         return src->pos2str(ls.orgpos() + (pos - ls.newpos()));
     }
-    virtual IDIterator *posat (Position pos) {
-    }
+    virtual IDIterator *posat (Position pos) {NOTIMPLEMENTED}
     virtual TextIterator *textat (Position pos) {
         MLTStream *s = level->at_new(pos);
         return new TextIter (s, src->textat(s->orgpos()), this);

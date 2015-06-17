@@ -1,0 +1,103 @@
+#! /usr/bin/python
+#  Copyright (c) 2008-2013  Pavel Rychly, Milos Jakubicek
+
+import sys
+import os
+import manatee
+import array
+
+stat_names = ["frq", "arf", "docf", "fid", "aldf"]
+
+def open_corpus():
+    corp = manatee.Corpus(sys.argv[1])
+    if sys.argv[4:]:
+        corp = manatee.SubCorpus (corp, sys.argv[4])
+    return corp
+
+def is_compiled (corp, attr, method):
+    if attr.endswith(".ngr"):
+        if (corp.get_conf("SUBCPATH")):
+            attr = manatee.NGram (corp.get_conf("PATH") + attr,
+                                  corp.get_conf("SUBCPATH") + attr)
+        else:
+            attr = manatee.NGram (corp.get_conf("PATH") + attr)
+        last = attr.size() - 1
+    else:
+        attr = corp.get_attr (attr)
+        last = attr.id_range() - 1
+    if getattr (attr, method) (last) != -1:
+        sys.stdout.write("%s already compiled, skipping.\n" % method)
+        return True
+    return False
+
+def compile_aldf (corp, attr):
+    if is_compiled (corp, attr, "aldf"):
+        return
+    corp.compile_aldf (attr)
+
+def compile_arf (corp, attr):
+    if not is_compiled (corp, attr, "freq"):
+        sys.stdout.write("Compiling frq (missing) first\n")
+        compile_frq (corp, attr)
+        corp = open_corpus() # must reopen freq files
+    if is_compiled (corp, attr, "arf"):
+        return
+    corp.compile_arf (attr)
+
+def compile_frq (corp, attr):
+    if is_compiled (corp, attr, "freq"):
+        return
+    corp.compile_frq (attr)
+
+def compile_fid (corp, attr):
+    if not is_compiled (corp, attr, "freq"):
+        sys.stdout.write("Compiling frq (missing) first\n")
+        compile_frq (corp, attr)
+        corp = open_corpus() # must reopen freq files
+    attr = corp.get_attr (attr)
+    freqs = [attr.freq(i) for i in xrange(attr.id_range())]
+    frqids = zip (freqs, xrange(len(freqs)))
+    frqids.sort(reverse=True)
+    fidfile = "%s%s.fid" % (corp.get_conf("SUBCPATH") or corp.get_conf("PATH"),
+                            attr.name)
+    outfid = array.array('i', [i for (f, i) in frqids])
+    outfid.tofile (open (fidfile + '.tmp', 'wb'))
+    os.rename (fidfile + '.tmp', fidfile)
+
+def compile_docf (corp, attr):
+    if is_compiled (corp, attr, "docf"):
+        return
+    doc_struc = corp.get_conf("DOCSTRUCTURE")
+    try:
+        doc = corp.get_struct(doc_struc)
+    except manatee.AttrNotFound:
+        sys.stdout.write ("No \"%s\" structure (DOCSTRUCTURE) available.\
+            Can't compile document freqs for %s." % (doc_struc, attr))
+        return
+    corp.compile_docf (attr, doc.name)
+
+def usage():
+    print 'Usage: mkstats CORPNAME ATTR STAT [ SUBCORP_FILE ]'
+    print 'Compiles the given statistics for an attribute\n'
+    print 'CORPNAME      corpus configuration file'
+    print 'ATTR          attribute name (append .ngr for n-grams)'
+    print 'STAT          statistics to be compiled, may be one of: '\
+                         + ', '.join (stat_names)
+    print 'SUBCORP_FILE  subcorpus (.subc) file'
+    sys.exit(1)
+
+if __name__ == "__main__":
+    if sys.argv[3:]:
+        corp = open_corpus()
+        attr = sys.argv[2]
+        stat = sys.argv[3]
+        if stat not in stat_names:
+            sys.stdout.write ("Invalid statistics name: %s\n" % stat)
+            sys.stdout.write ("Valid names are: %s\n" % ",".join (stat_names))
+            usage()
+        sys.stdout.write("Compiling %s for attribute %s\n" % (stat, attr))
+        globals()["compile_" + stat] (corp, attr)
+    else:
+        usage()
+
+# vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

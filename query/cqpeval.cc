@@ -1,9 +1,9 @@
-// Copyright (c) 2001-2012 Pavel Rychly
+// Copyright (c) 2001-2012  Pavel Rychly, Milos Jakubicek
 
 #include "cqpeval.hh"
-#include "cqpLexer.hpp"
-#include "cqpParser.hpp"
-#include "cqpTreeWalker.hpp"
+#include "cqpLexer.hh"
+#include "cqpParser.hh"
+#include "cqpTreeWalker.hh"
 #include "config.hh"
 #include <sstream>
 #include <iostream>
@@ -16,8 +16,11 @@ RangeStream *eval_cqpquery (const char *query, Corpus *corp)
     throw EvalQueryException ("Internal Error: eval_cqpquery(corp==NULL)");
     if (!query)
     throw EvalQueryException ("Internal Error: eval_cqpquery(query==NULL)");
+    if (!*query)
+    throw EvalQueryException ("Internal Error: eval_cqpquery(query[0]==NULL)");
+
     
-#ifdef ANTLR_34_API
+#ifdef MANATEE_ANTLR_34_API
     pANTLR3_INPUT_STREAM input = antlr3StringStreamNew ((pANTLR3_UINT8) query, ANTLR3_ENC_8BIT, (ANTLR3_UINT32) strlen(query), (pANTLR3_UINT8) "CQP Stream");
 #else
     pANTLR3_INPUT_STREAM input = antlr3NewAsciiStringInPlaceStream ((pANTLR3_UINT8) query, (ANTLR3_UINT32) strlen(query), (pANTLR3_UINT8) "CQP Stream");
@@ -66,9 +69,11 @@ RangeStream *eval_cqpquery (const char *query, Corpus *corp)
     parser->free(parser);
     tokenStream->free(tokenStream);
     lexer->free(lexer);
+    input->free(input);
     parser = NULL;
     tokenStream = NULL;
     lexer = NULL;
+    input = NULL;
 
     if (!r) {
         errmsg = "Internal error: couldn't recover from tree walker failure.";
@@ -88,7 +93,7 @@ FastStream *eval_cqponepos (const char *query, Corpus *corp)
     if (!query)
     throw EvalQueryException ("Internal Error: eval_cqponepos(query==NULL)");
 
-#ifdef ANTLR_34_API
+#ifdef MANATEE_ANTLR_34_API
     pANTLR3_INPUT_STREAM input = antlr3StringStreamNew ((pANTLR3_UINT8) query, ANTLR3_ENC_8BIT, (ANTLR3_UINT32) strlen(query), (pANTLR3_UINT8) "CQP Stream");
 #else
     pANTLR3_INPUT_STREAM input = antlr3NewAsciiStringInPlaceStream ((pANTLR3_UINT8) query, (ANTLR3_UINT32) strlen(query), (pANTLR3_UINT8) "CQP Stream");
@@ -139,9 +144,11 @@ FastStream *eval_cqponepos (const char *query, Corpus *corp)
     parser->free(parser);
     tokenStream->free(tokenStream);
     lexer->free(lexer);
+    input->free(input);
     parser = NULL;
     tokenStream = NULL;
     lexer = NULL;
+    input = NULL;
 
     if (!r) {
         errmsg = "Internal error: couldn't recover from tree walker failure.";
@@ -160,8 +167,6 @@ void throwEvalQueryException (pANTLR3_BASE_RECOGNIZER recognizer, pANTLR3_UINT8 
 
     pANTLR3_LEXER           lexer;  
     pANTLR3_PARSER          parser;
-    pANTLR3_TREE_PARSER     tparser;
-    pANTLR3_INT_STREAM      is;
     pANTLR3_INPUT_STREAM    ips;
     pANTLR3_STRING          ttext;
     pANTLR3_EXCEPTION       ex;
@@ -187,11 +192,10 @@ void throwEvalQueryException (pANTLR3_BASE_RECOGNIZER recognizer, pANTLR3_UINT8 
         //
         lexer       = (pANTLR3_LEXER) (recognizer->super);
         parser      = NULL;
-        tparser     = NULL;
         ips         = lexer->input;
         ttext       = NULL;
 
-        exMessage += sprintf(exMessage, ", at position %d: '%s'", recognizer->state->exception->charPositionInLine, ips->nextChar);
+        exMessage += sprintf(exMessage, ", at position %d: '%s'", recognizer->state->exception->charPositionInLine, (char *) ips->nextChar);
         break;
 
     case    ANTLR3_TYPE_PARSER:
@@ -199,8 +203,6 @@ void throwEvalQueryException (pANTLR3_BASE_RECOGNIZER recognizer, pANTLR3_UINT8 
         // Prepare the knowledge we know we have
         //
         parser      = (pANTLR3_PARSER) (recognizer->super);
-        tparser     = NULL;
-        is          = parser->tstream->istream;
         theToken    = (pANTLR3_COMMON_TOKEN)(recognizer->state->exception->token);
         ttext       = parser->tstream->toStringTT(parser->tstream, theToken, theToken);
 
@@ -215,16 +217,14 @@ void throwEvalQueryException (pANTLR3_BASE_RECOGNIZER recognizer, pANTLR3_UINT8 
             {
                 // Guard against null text in a token
                 //
-                exMessage += sprintf(exMessage, " near %s ", ttext == NULL ? (pANTLR3_UINT8)"<no text for the token>" : ttext->chars);
+                exMessage += sprintf(exMessage, " near '%s' ", ttext == NULL ? (pANTLR3_UINT8)"<no text for the token>" : ttext->chars);
             }
         }
         break;
 
     case    ANTLR3_TYPE_TREE_PARSER:
 
-        tparser     = (pANTLR3_TREE_PARSER) (recognizer->super);
         parser      = NULL;
-        is          = tparser->ctnstream->tnstream->istream;
         theBaseTree = (pANTLR3_BASE_TREE)(recognizer->state->exception->token);
         ttext       = theBaseTree->toStringTree(theBaseTree);
 
@@ -237,7 +237,7 @@ void throwEvalQueryException (pANTLR3_BASE_RECOGNIZER recognizer, pANTLR3_UINT8 
                 theToken    = (pANTLR3_COMMON_TOKEN)    theBaseTree->getToken(theBaseTree);
             }
             exMessage += sprintf(exMessage, ", at position %d", theBaseTree->getCharPositionInLine(theBaseTree));
-            exMessage += sprintf(exMessage, ", near %s", ttext->chars);
+            exMessage += sprintf(exMessage, ", near '%s'", ttext->chars);
         }
         break;
 

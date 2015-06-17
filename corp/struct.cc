@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2013  Pavel Rychly, Milos Jakubicek
 
 #include "corpus.hh"
 
@@ -60,9 +60,10 @@ public:
             return pa->pos2str (n);
         while (st->rng->nesting_at(n))
             n--;
-        string ret = "";
-        while ((st->rng->nesting_at(n) || pos >= st->rng->beg_at(n))
-               && n < st->rng->size()) {
+        static string ret;
+        ret.clear();
+        while (n < st->rng->size()
+               && (st->rng->nesting_at(n) || pos >= st->rng->beg_at(n))) {
             if (pos >= st->rng->beg_at(n) && pos < st->rng->end_at(n)) {
                 ret += pa->pos2str (n);
                 ret += multisep;
@@ -74,6 +75,7 @@ public:
         return ret.c_str();
     }
     virtual IDIterator *posat (Position pos) {NOTIMPLEMENTED}
+    virtual IDPosIterator *idposat (Position pos) {NOTIMPLEMENTED}
     virtual TextIterator *textat (Position pos) {NOTIMPLEMENTED}
     virtual FastStream *id2poss (int id) {NOTIMPLEMENTED}
     virtual FastStream *regexp2poss (const char *pat, bool) {NOTIMPLEMENTED}
@@ -81,6 +83,9 @@ public:
     virtual Generator<int> *regexp2ids (const char *pat, bool ignorecase, const char *filter_pat)
         {return pa->regexp2ids (pat,ignorecase,filter_pat);}
     virtual NumOfPos freq (int id) {return pa->freq (id);}
+    virtual NumOfPos docf (int id) {return pa->docf (id);}
+    virtual float arf (int id) {return pa->arf (id);}
+    virtual float aldf (int id) {return pa->aldf (id);}
     virtual NumOfPos norm (int id) {return pa->norm (id);}
     virtual NumOfPos size () {NOTIMPLEMENTED}
 };

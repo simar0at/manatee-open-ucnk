@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2014  Pavel Rychly, Milos Jakubicek
 
 #include "concord.hh"
 #include "levels.hh"
@@ -31,9 +31,9 @@ Position simple_context::get (RangeStream *r)
     if (collnum > 0) {
         Labels lab;
         r->add_labels (lab);
-        return begin ? (*fun)(lab[collnum]) : (*fun)(lab[-collnum] -1);
+        return begin ? (*fun)(lab[collnum]) : (*fun)(max(NumOfPos(0),lab[-collnum] -1));
     } else
-        return begin ? (*fun)(r->peek_beg()) : (*fun)(r->peek_end() -1);
+        return begin ? (*fun)(r->peek_beg()) : (*fun)(max(NumOfPos(0), r->peek_end() -1));
 }
 
 //-------------------- ctx_* --------------------
@@ -59,8 +59,17 @@ public:
     virtual Position operator() (Position pos) {
         NumOfPos n = rng->num_at_pos (pos);
         if (n == -1)
-            return -1;
-        return rng->beg_at (min(max(NumOfPos(0), n + delta), rng->size()-1));
+            return pos - 15;
+        Position p = rng->beg_at (min(max(NumOfPos(0), n + delta),
+                                      rng->size()-1));
+        if (p == pos) {
+            n = rng->num_at_pos (pos - 1);
+            if (n == -1)
+                return pos - 15;
+            return rng->beg_at (min(max(NumOfPos(0), n + delta),
+                                    rng->size()-1));
+        }
+        return p;
     }
 };
 
@@ -72,8 +81,17 @@ public:
     virtual Position operator() (Position pos) {
         NumOfPos n = rng->num_at_pos (pos);
         if (n == -1)
-            return -1;
-        return rng->end_at (min(max(NumOfPos(0), n + delta), rng->size()-1)) -1;
+            return pos + 15;
+        Position p = rng->end_at (min(max(NumOfPos(0), n + delta),
+                                      rng->size()-1)) -1;
+        if (p == pos) {
+            n = rng->num_at_pos (pos + 1);
+            if (n == -1)
+                return pos + 15;
+            return rng->end_at (min(max(NumOfPos(0), n + delta),
+                                    rng->size()-1)) -1;
+        }
+        return p;
     }
 };
 
@@ -87,10 +105,9 @@ public:
         : to_corp (tc), map (NULL), begin (begin) {
         to_align = to_corp->get_struct(to_corp->get_conf("ALIGNSTRUCT"));
         Corpus *from_corp = to_corp->get_aligned (fc);
-        if (! from_corp->get_conf("ALIGNDEF").empty()) {
-            map = full_level (from_corp->get_conf("PATH") + "align."
-                              + to_corp->get_conffile());
-        }
+        if (! from_corp->get_conf("ALIGNDEF").empty())
+            map = full_level (from_corp->get_aligned_level
+                              (to_corp->get_conffile()));
     }
     ~ctx_aligned() {delete map;}
     virtual Position operator() (Position pos) {

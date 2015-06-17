@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2014  Pavel Rychly, Milos Jakubicek
 
 #include "concord.hh"
 #include "levels.hh"
@@ -38,7 +38,7 @@ void Concordance::reduce_lines (const char *crit)
     }
 
     vector<ConcData> concdata;
-    for (int i = 0; i < aligned.size(); i++)
+    for (unsigned i = 0; i < aligned.size(); i++)
         concdata.push_back(ConcData(&aligned[i]->colls, &aligned[i]->coll_count,
                                     &aligned[i]->rng));
     concdata.push_back(ConcData(&colls, &coll_count, &rng));
@@ -111,7 +111,7 @@ void Concordance::delete_lines (ConcData *data, ConcIndex newsize, int collnum,
         }
     }
 
-    delete data->rng;
+    free (data->rng);
     data->rng = newrng;
     for (unsigned int i = 0; i < data->colls.size(); i++)
         free (data->colls[i]);
@@ -138,7 +138,7 @@ void Concordance::delete_pnfilter (int collnum, bool positive)
         view = new vector<ConcIndex>(vs, -1);
     }
 
-    for (int c = 0; c < aligned.size(); c++)
+    for (unsigned c = 0; c < aligned.size(); c++)
         delete_lines (aligned[c], newsize, collnum, positive, NULL, NULL);
     delete_lines (this, newsize, collnum, positive, view, revview);
 
@@ -161,11 +161,19 @@ void Concordance::swap_kwic_coll (int collnum)
     if (collnum < 1 || unsigned (collnum) > colls.size() 
         || coll_count [collnum -1] == 0)
         return;
-    ConcItem *ri = rng;
-    collocitem *ci = colls [collnum -1];
-    for (ConcItem *last = rng + used; ri < last; ri++, ci++) {
-        if (ci->beg == cnotdef) continue;
-        int oldend = ri->end;
+    collnum--;
+    for (ConcIndex i = 0; i < used; i++) {
+        collocitem *ci = &colls [collnum][i];
+        if (ci->beg == cnotdef)
+            continue;
+        ConcItem *ri = &rng[i];
+        for (int c = 0; c < (int) colls.size(); c++) {
+            if (c == collnum || colls[c][i].beg == cnotdef)
+                continue;
+            colls[c][i].beg -= ci->beg;
+            colls[c][i].end -= ci->beg;
+        }
+        Position oldend = ri->end;
         ri->end = ri->beg + ci->end;
         ri->beg += ci->beg;
         ci->beg = - ci->beg;
@@ -198,20 +206,6 @@ void Concordance::extend_kwic_coll (int collnum)
     coll_count [collnum - 1] = 0;
 }
 
-/**
- * Generates a random number from 0 to min(i, RAND_MAX).
- * We assume that RAND_MAX is ~ max. available integer
- * (see you stdlib.h for actual value).
- */
-int custom_rand(int i) 
-{ 
-    srand(1298131);
-    return rand() % i;
-}
-
-/**
- * Shuffles the concordance in a replicable way
- */
 void Concordance::shuffle()
 {
     sync();
@@ -220,7 +214,7 @@ void Concordance::shuffle()
         for (ConcIndex i=0; i < size(); i++)
             (*view)[i] = i;
     }
-    random_shuffle(view->begin(), view->end(), custom_rand);
+    random_shuffle(view->begin(), view->end());
 }
 
 void Concordance::switch_aligned (const char *corpname)
@@ -229,7 +223,7 @@ void Concordance::switch_aligned (const char *corpname)
     if (!corpname)
         return;
     CorpData *data = NULL;
-    for (int i = 0; i < aligned.size(); i++) {
+    for (unsigned i = 0; i < aligned.size(); i++) {
         if (!strcmp(aligned[i]->corp->get_conffile(), corpname)) {
             data = aligned[i];
             break;
@@ -266,7 +260,7 @@ void Concordance::add_aligned (const char *corpname)
     sync();
     if (!corpname || !strcmp(corpname, corp->get_conffile()))
         return;
-    for (int i = 0; i < aligned.size(); i++)
+    for (unsigned i = 0; i < aligned.size(); i++)
         if (!strcmp(aligned[i]->corp->get_conffile(), corpname))
             return; // do not add if present
     CorpData *cdata = new Concordance::CorpData();
@@ -280,10 +274,8 @@ void Concordance::add_aligned (const char *corpname)
     Structure *add_align = cdata->corp->get_struct
         (cdata->corp->get_conf("ALIGNSTRUCT"));
     MLTStream *map = NULL;
-    if (! corp->get_conf("ALIGNDEF").empty()) {
-        map = full_level (corp->get_conf("PATH") + "align." 
-                          + cdata->corp->get_conffile());
-    }
+    if (! corp->get_conf("ALIGNDEF").empty())
+        map = full_level(corp->get_aligned_level(cdata->corp->get_conffile()));
     NumOfPos align_num, align_end;
     bool empty; 
     for (int i = 0; i < used; i++) {
@@ -319,6 +311,166 @@ void Concordance::add_aligned (const char *corpname)
             cdata->rng[i].end = add_align->rng->end_at (align_end);
     }
     delete map;
+}
+
+template <class ConcData>
+void Concordance::delete_subpart_lines (ConcData *data, vector<ConcIndex> *view,
+                                        vector<ConcIndex> *revview)
+{
+    ConcItem *newrng = (ConcItem *) malloc (size() * sizeof (ConcItem));
+    vector<collocitem*> newcolls (data->colls.size());
+    vector<ConcIndex> newcoll_count (data->colls.size());
+    for (unsigned int i = 0; i < data->colls.size(); i++)
+        if (data->colls[i])
+            newcolls[i] = (collocitem*) malloc (size() * sizeof (collocitem));
+    Position oldl, newl;
+    for (oldl = newl = 0; oldl < size() && newl < size(); oldl++) {
+        if (data->rng[oldl].beg != -1) {
+            if (!newl || (data->rng[oldl].beg != newrng [newl - 1].beg &&
+                          data->rng[oldl].end != newrng [newl - 1].end)) {// not subpart
+                newrng [newl] = data->rng [oldl];
+                for (unsigned int i = 0; i < data->colls.size(); i++) {
+                    if (data->colls[i]) {
+                        newcolls[i][newl] = data->colls[i][oldl];
+                        if (newcolls[i][newl].beg != cnotdef)
+                            newcoll_count[i] ++;
+                    }
+                }
+                if (revview)
+                    (*view)[(*revview)[oldl]] = newl;
+                newl++;
+            } else if ((data->rng[oldl].beg == newrng [newl - 1].beg &&
+                        data->rng[oldl].end < newrng [newl - 1].end)
+                    || (data->rng[oldl].end == newrng [newl - 1].end &&
+                        data->rng[oldl].beg < newrng [newl - 1].beg)) {
+                newrng [newl - 1] = data->rng [oldl];
+                for (unsigned int i = 0; i < data->colls.size(); i++) {
+                    if (data->colls[i]) {
+                        newcolls[i][newl - 1] = data->colls[i][oldl];
+                        if (newcolls[i][newl].beg == cnotdef)
+                            newcoll_count[i] --;
+                    }
+                }
+            }
+        }
+    }
+    used = allocated = newl;
+    newrng = (ConcItem *) realloc (newrng, used * sizeof (ConcItem));
+    for (unsigned int i = 0; i < data->colls.size(); i++)
+        if (data->colls[i])
+            newcolls[i] = (collocitem*) realloc (newcolls[i],
+                                                 used * sizeof (collocitem));
+
+    free (data->rng);
+    data->rng = newrng;
+    for (unsigned int i = 0; i < data->colls.size(); i++)
+        free (data->colls[i]);
+    data->colls = newcolls;
+    data->coll_count = newcoll_count;
+}
+
+void Concordance::delete_subparts ()
+{
+    sync();
+    vector<ConcIndex> *revview = NULL;
+    if (view) {
+        ConcIndex vs = view->size();
+        revview = new vector<ConcIndex>(allocated, -1);
+        for (ConcIndex i=0; i < vs; i++)
+            (*revview)[(*view)[i]] = i;
+        delete view;
+        view = new vector<ConcIndex>(vs, -1);
+    }
+
+    for (unsigned c = 0; c < aligned.size(); c++)
+        delete_subpart_lines (aligned[c], NULL, NULL);
+    delete_subpart_lines (this, view, revview);
+
+    if (revview) {
+        delete revview;
+        vector<ConcIndex>::iterator vi = find (view->begin(), view->end(), -1);
+        for (vector<ConcIndex>::iterator si = vi; si != view->end(); si++)
+            if (*si != -1)
+                *(vi++) = *si;
+        if (vi != view->end())
+            view->erase (vi, view->end());
+    }
+
+}
+
+template <class ConcData>
+void Concordance::delete_struct_repeats_lines (ConcData *data,
+     vector<ConcIndex> *view, vector<ConcIndex> *revview, const char *struc)
+{
+    RangeStream *rs = data->corp->get_struct (struc)->rng->whole();
+    ConcItem *newrng = (ConcItem *) malloc (size() * sizeof (ConcItem));
+    vector<collocitem*> newcolls (data->colls.size());
+    vector<ConcIndex> newcoll_count (data->colls.size());
+    for (unsigned int i = 0; i < data->colls.size(); i++)
+        if (data->colls[i])
+            newcolls[i] = (collocitem*) malloc (size() * sizeof (collocitem));
+    Position oldl, newl;
+    for (oldl = newl = 0; oldl < size() && newl < size(); oldl++) {
+        if (data->rng[oldl].beg != -1) {
+            if (!rs->end() && data->rng[oldl].beg >= rs->peek_beg()) {
+                newrng [newl] = data->rng [oldl];
+                for (unsigned int i = 0; i < data->colls.size(); i++) {
+                    if (data->colls[i]) {
+                        newcolls[i][newl] = data->colls[i][oldl];
+                        if (newcolls[i][newl].beg != cnotdef)
+                            newcoll_count[i] ++;
+                    }
+                }
+                if (revview)
+                    (*view)[(*revview)[oldl]] = newl;
+                newl++;
+                rs->find_beg(data->rng[oldl].beg + 1);
+            }
+        }
+    }
+    delete rs;
+    used = allocated = newl;
+    newrng = (ConcItem *) realloc (newrng, used * sizeof (ConcItem));
+    for (unsigned int i = 0; i < data->colls.size(); i++)
+        if (data->colls[i])
+            newcolls[i] = (collocitem*) realloc (newcolls[i],
+                                                 used * sizeof (collocitem));
+
+    free (data->rng);
+    data->rng = newrng;
+    for (unsigned int i = 0; i < data->colls.size(); i++)
+        free (data->colls[i]);
+    data->colls = newcolls;
+    data->coll_count = newcoll_count;
+}
+
+void Concordance::delete_struct_repeats (const char *struc)
+{
+    sync();
+    vector<ConcIndex> *revview = NULL;
+    if (view) {
+        ConcIndex vs = view->size();
+        revview = new vector<ConcIndex>(allocated, -1);
+        for (ConcIndex i=0; i < vs; i++)
+            (*revview)[(*view)[i]] = i;
+        delete view;
+        view = new vector<ConcIndex>(vs, -1);
+    }
+
+    for (unsigned c = 0; c < aligned.size(); c++)
+        delete_struct_repeats_lines (aligned[c], NULL, NULL, struc);
+    delete_struct_repeats_lines (this, view, revview, struc);
+
+    if (revview) {
+        delete revview;
+        vector<ConcIndex>::iterator vi = find (view->begin(), view->end(), -1);
+        for (vector<ConcIndex>::iterator si = vi; si != view->end(); si++)
+            if (*si != -1)
+                *(vi++) = *si;
+        if (vi != view->end())
+            view->erase (vi, view->end());
+    }
+
 }
 
 // vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

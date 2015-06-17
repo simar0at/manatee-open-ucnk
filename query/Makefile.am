@@ -1,12 +1,15 @@
-# Copyright (c) 2003-2008  Pavel Rychly
+# Copyright (c) 2003-2014  Pavel Rychly, Milos Jakubicek
 
-ANTLR_GENERATED = cqpLexer.hpp cqpLexer.cpp cqpParser.hpp cqpParser.cpp cqp.tokens cqpTreeWalker.hpp cqpTreeWalker.cpp
+AM_CPPFLAGS += -I$(top_srcdir)/corp -I$(top_builddir)
+ANTLR_GENERATED = cqpLexer.hh cqpLexer.cc cqpParser.hh cqpParser.cc cqp.tokens cqpTreeWalker.hh cqpTreeWalker.cc
 
-noinst_LTLIBRARIES = libquery.la
-noinst_PROGRAMS = tstcqpgr tstcqpgr2
+noinst_LTLIBRARIES = libquery.la libantlrgen.la
 libquery_la_SOURCES = cqpeval.cc frconcat.cc frstream.cc parsop.cc \
-	frsop.hh parsop.hh $(ANTLR_GENERATED)
-
+	frsop.hh parsop.hh
+libquery_la_LIBADD = libantlrgen.la
+libantlrgen_la_SOURCES = $(ANTLR_GENERATED)
+libantlrgen_la_CPPFLAGS = $(AM_CPPFLAGS) -Wno-unused-but-set-variable \
+                          -Wno-unused-variable -Wno-unused-function
 
 query_headers = cqpeval.hh
 
@@ -16,7 +19,7 @@ else
 libquery_la_SOURCES += $(query_headers)
 endif
 
-
+EXTRA_DIST = cqp.g cqpTreeWalker.g
 MAINTAINERCLEANFILES = 	$(ANTLR_GENERATED)
 
 cqpeval.lo: $(ANTLR_GENERATED)
@@ -24,36 +27,22 @@ cqpeval.lo: $(ANTLR_GENERATED)
 test-grammar:
 	./tstquery.sh
 
-AM_CPPFLAGS = -I$(top_srcdir)/corp -I$(top_builddir)
+cqp.tokens: cqp.g cqpTreeWalker.g
+	$(ANTLR_BIN) -verbose cqp.g cqpTreeWalker.g
+	for cppsource in cqp*.c; do mv $$cppsource `basename $$cppsource .c`.cc; done ; \
+	for cppheader in cqp*.h; do awk '/#ifdef __cplusplus/ {skip=3};!skip {print};skip {skip=skip-1};' $$cppheader > `basename $$cppheader .h`.hh; rm $$cppheader; done ; \
+	sed -i 's/"cqpLexer.h"/"cqpLexer.hh"/' cqpLexer.cc ; \
+	sed -i 's/"cqpParser.h"/"cqpParser.hh"/' cqpParser.cc ; \
+	sed -i 's/"cqpTreeWalker.h"/"cqpTreeWalker.hh"/' cqpTreeWalker.cc ;
 
-
-ANTLROPTS = -make -verbose
-# '-make' remakes the grammar only if it is newer than the generated files
-# this makes it possible to parallelize the build (otherwise make gets into trouble
-# when multiple subgoals induce a command making multiple goals).
-
-tstcqpgr_SOURCES = tstcqpgr.cc
-tstcqpgr_CPPFGLAGS = 
-tstcqpgr_LDADD = libquery.la $(top_builddir)/corp/libcorp.la \
-	$(FINLIB_LDFLAG) $(ANTLR_LDFLAG) $(REGEX_LDFLAG)
-
-tstcqpgr2_SOURCES = tstcqpgr2.cc
-tstcqpgr2_CPPFGLAGS = 
-tstcqpgr2_LDADD = libquery.la $(top_builddir)/corp/libcorp.la \
-	$(FINLIB_LDFLAG) $(ANTLR_LDFLAG) $(REGEX_LDFLAG)
-
-if LOCALBZR
-cqpLexer.hpp cqpLexer.cpp cqpParser.hpp cqp.tokens cqpParser.cpp cqpTreeWalker.hpp cqpTreeWalker.cpp cqpTreeWalker.tokens: grammars
-
-grammars: 
-	$(ANTLR_BIN) $(ANTLROPTS) cqp.g cqpTreeWalker.g | tee antlr.out
-	@if [ `grep -c skipped antlr.out` -ne 2 ]; then \
-		for cppsource in cqp*.c; do ln -sf $$cppsource `basename $$cppsource .c`.cpp; done ; \
-		for cppheader in cqp*.h; do awk '/#ifdef __cplusplus/ {skip=3};!skip {print};skip {skip=skip-1};' $$cppheader > `basename $$cppheader .h`.hpp; done ; \
-		sed -i 's/"cqpLexer.h"/"cqpLexer.hpp"/' cqpLexer.cpp ; \
-		sed -i 's/"cqpParser.h"/"cqpParser.hpp"/' cqpParser.cpp ; \
-		sed -i 's/"cqpTreeWalker.h"/"cqpTreeWalker.hpp"/' cqpTreeWalker.cpp ; \
+# fix parallel build:
+$(filter-out cqp.tokens,$(ANTLR_GENERATED)): cqp.tokens
+	@if test -f $@; then \
+	  touch $@; \
+	else \
+## Recover from the removal of $@
+	rm -f cqp.tokens; \
+	$(MAKE) $(AM_MAKEFLAGS) cqp.tokens; \
 	fi
-endif
 
-.PHONY: grammars test-grammar
+.PHONY: test-grammar

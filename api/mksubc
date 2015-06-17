@@ -1,133 +1,31 @@
-#! /usr/bin/env python
-#  Copyright (c) 2008-2013  Pavel Rychly
-
-"""Creates subcorpora (*.subc) files and respective statistics
-according to subcorpus definition file (see doc/subcdef.txt)
-"""
+#! /usr/bin/python
+#  Copyright (c) 2008-2014  Pavel Rychly, Milos Jakubicek
 
 import sys
 import os
 import manatee
 
-docfattrs = ["word", "lemma", "lempos"]
-
-class NGram2PosAttr:
-    # NGram works as PosAttr for scanning all n-grams
-    def __init__ (self, corp, attr, ngrpath):
-        self.ngr = manatee.NGram (ngrpath)
-        self.corp = corp
-        self.attr = attr
-        self.name = attr.name + ".ngr"
-
-    def id_range (self):
-        return self.ngr.size()
-
-    def id2poss (self, i):
-        lids = self.ngr.lids(i)
-        vals = [self.attr.id2str(lids.next()).replace('"', '\\"')
-                for _ in range(self.ngr.min(i))]
-        query = '[%s=="%s"]' % (self.attr.name, vals[0])
-        for k in range(1,len(vals)):
-            query = '(meet %s [%s=="%s"] %d %d)' % (query, self.attr.name,
-                                                    vals[k], k, k)
-        return self.corp.Range2Pos(self.corp.eval_query (query))
-
-def update_progress(increment):
-    global progress
-    progress += increment
-    sys.stdout.write('\r%s%%' % round(progress))
-    sys.stdout.flush()
-
-def create_docf_db (subcpath, subc, attr, maxprogress):
-    sys.stderr.write("docf:\n")
-    outfilename = subcpath + attr.name
-    if os.path.isfile (outfilename + '.docf'):
-        sys.stderr.write("present, skipping. ")
-        return
-    import array
-    outfrq = array.array('i')
-
-    try:
-        docstructure = subc.get_conf("DOCSTRUCTURE")
-        doc = subc.get_struct(docstructure)
-    except manatee.AttrNotFound:
-        print >> sys.stderr, "mksubc: No \"%s\" structure (DOCSTRUCTURE) " \
-            "available. Can't compile document freqs for %s." % (
-                docstructure, attr.name)
-        return
-    toprocessids = float (attr.id_range())
-    nextidslog = 0
-    logstep = 0.01 * toprocessids
-    global progress
-    for i in xrange(attr.id_range()):
-        sys.stderr.write("\r%d out of %d" % (i, toprocessids))
-        fs = attr.id2poss(i)
-        rs = doc.whole()
-        outfrq.append(subc.compute_docf(fs, rs))
-        if i >= nextidslog:
-            sys.stdout.write('\r%s%%' % round(progress + (i / toprocessids) * maxprogress))
-            sys.stdout.flush()
-            nextidslog += logstep
-    outfrq.tofile (open (outfilename + '.docf.tmp', 'wb'))
-    os.rename (outfilename + '.docf.tmp', outfilename + '.docf')
-
-def create_arf_db (subcpath, subc, attr, maxprogress):
-    sys.stderr.write ("frq/arf/fid:\n")
-    outfilename = subcpath + attr.name
-    if os.path.isfile (outfilename + '.arf'):
-        sys.stderr.write("present, skipping. ")
-        return
-    import array
-    outarf = array.array('f')
-    outfrq = array.array('i')
-    frqsize = {'i': "", 'l': "64"}
-
-    toprocessids = float (attr.id_range())
-    nextidslog = 0
-    logstep = 0.01 * toprocessids
-    global progress
-    for i in xrange(attr.id_range()):
-        sys.stderr.write("\r%d out of %d" % (i, toprocessids))
-        fs = attr.id2poss(i)
-        freq = subc.count_rest (fs)
-        fs = attr.id2poss(i)
-        arf = subc.count_ARF (fs, freq)
-        try:
-            outfrq.append (freq)
-        except OverflowError:
-            outfrq = array.array('l', outfrq)
-            outfrq.append (freq)
-        outarf.append (arf)
-        if i >= nextidslog:
-            sys.stdout.write('\r%s%%' % round(progress + (i / toprocessids) * maxprogress))
-            sys.stdout.flush()
-            nextidslog += logstep
-    frqids = zip (outfrq, xrange(len(outfrq)))
-    frqids.sort(reverse=True)
-    outfid = array.array('i', [i for (f,i) in frqids])
-    outarf.tofile (open (outfilename + '.arf.tmp', 'wb'))
-    outfrq.tofile (open (outfilename + '.frq.tmp', 'wb'))
-    outfid.tofile (open (outfilename + '.fid.tmp', 'wb'))
-    os.rename (outfilename + '.arf.tmp', outfilename + '.arf')
-    os.rename (outfilename + '.frq.tmp', outfilename + '.frq' +
-            frqsize[outfrq.typecode])
-    os.rename (outfilename + '.fid.tmp', outfilename + '.fid')
-
 def create_subcorpus (corp, subcdir, subcname, strucname, query):
-    path = subcdir + '/' + subcname + '.'
-    if not manatee.create_subcorpus (path + 'subc', corp, strucname, query):
-        sys.stderr.write("warning: empty subcorpus for query '%s %s'\n"
+    path = subcdir + '/' + subcname + '.subc'
+    sys.stdout.write("Subcorpus %s..." % subcname)
+    if strucname == "-CQL-":
+        r = manatee.create_subcorpus (path, corp.eval_query (query))
+    else:
+        r = manatee.create_subcorpus (path, corp, strucname, query)
+    if not r:
+        sys.stdout.write("warning: empty subcorpus for query '%s %s'\n"
                          % (strucname, query))
         return None
+    sys.stdout.write("done\n")
     return path
 
 def process_def_file (corpname, subcdir, infile):
-    sys.stderr.write("Compiling subcorpora...\n")
+    sys.stdout.write("Compiling subcorpora...\n")
     infile = open(infile)
     corp = manatee.Corpus(corpname)
     if not os.path.isdir(subcdir):
         os.mkdir(subcdir)
-    paths = []
+    frqattrs = None
     while 1:
         line = infile.readline()
         if not line:
@@ -138,105 +36,38 @@ def process_def_file (corpname, subcdir, infile):
         if line.startswith('*FREQLISTATTRS'):
             frqattrs = line.split()[1:]
         elif line.startswith('='):
+            if not frqattrs:
+                print 'No FREQLISTATTRS given -- exiting.'
+                break
             subcname = line[1:].strip()
             structname = infile.readline().strip()
             query = infile.readline().strip()
             path = create_subcorpus (corp, subcdir, subcname, structname, query)
-            paths.append(path)
+            if path and compile_stats:
+                for attr in frqattrs:
+                    for stat in compile_stats:
+                        os.system ("mkstats %s %s %s %s"
+                                    % (corpname, attr, stat, path))
         else:
-            print 'Format error: "%s"' % line.strip()
-    numofsubcorp = len(paths)
-    return frqattrs, paths, numofsubcorp
-
-def process_subcorpus (corp, path, frqattrs, arfmaxprog, docfmaxprog):
-    sys.stderr.write("Processing subcorpora:\n")
-    for attr in frqattrs:
-        sys.stderr.write("%s: " % attr)
-        # reopen each time so that previous attr gets freed
-        subc = manatee.SubCorpus (corp, path + 'subc')
-        try:
-            if attr.endswith(".ngr"):
-                posattr = corp.get_attr(attr[:-4])
-            else:
-                posattr = corp.get_attr(attr)
-        except manatee.AttrNotFound:
-            sys.stderr.write("warning: '%s' attribute does not exist, skipping\n"
-                             % attr)
-            continue
-        if attr.endswith(".ngr"):
-            try:
-                posattr = NGram2PosAttr (subc, posattr, '%s/%s'
-                                         % (corp.get_conf('PATH'), attr))
-            except RuntimeError: # no n-grams
-                sys.stderr.write("warning: no n-grams available for"
-                                 "attribute '%s', skipping\n" % attr)
-                pass
-        create_arf_db (path, subc, posattr, arfmaxprog)
-        update_progress(arfmaxprog)
-        if attr in docfattrs:
-            create_docf_db (path, subc, posattr, docfmaxprog)
-            update_progress(docfmaxprog)
-
-def process_corpus (corpname, frqattrs, arfmaxprog, docfmaxprog):
-    sys.stderr.write("Processing corpus:\n")
-    for attr in frqattrs:
-        sys.stderr.write("%s: " % attr)
-        # reopen each time so that previous attr gets freed
-        corp = manatee.Corpus(corpname)
-        try:
-            if attr.endswith(".ngr"):
-                posattr = corp.get_attr(attr[:-4])
-            else:
-                posattr = corp.get_attr(attr)
-        except manatee.AttrNotFound:
-            sys.stderr.write("warning: '%s' attribute does not exist, skipping\n"
-                             % attr)
-            continue
-        path = corp.get_conf('PATH')
-        if attr.endswith(".ngr"):
-            try:
-                posattr = NGram2PosAttr (corp, posattr, '%s/%s' % (path, attr))
-            except RuntimeError: # no n-grams
-                sys.stderr.write("warning: no n-grams available for"
-                                 "attribute '%s', skipping\n" % attr)
-                continue
-        create_arf_db (path, corp, posattr, arfmaxprog)
-        update_progress(arfmaxprog)
-        if attr in docfattrs:
-            create_docf_db (path, corp, posattr, docfmaxprog)
-            update_progress(docfmaxprog)
-    sys.stdout.write("\n")
-
+            print 'Subcorpus definition file format error: "%s"' % line.strip()
 
 if __name__ == "__main__":
-    global progress
-    progress = 0
+    compile_stats = []
+    if len(sys.argv) > 2 and sys.argv[1] == "-s":
+        compile_stats = sys.argv[2].split(",")
+        sys.argv = sys.argv[2:]
     if sys.argv[3:]: # process subcorpus
-        corp = manatee.Corpus(sys.argv[1])
-        frqattrs = None
-        if sys.argv[3].endswith(".subc"):
-            paths = [sys.argv[3][:-4]]
-            numofsubcorp = 1
-        else:
-            frqattrs, paths, numofsubcorp = process_def_file (*sys.argv[1:4])
-        if len(sys.argv) > 4:
-            frqattrs = sys.argv[4].split(",")
-        elif not frqattrs:
-            frqattrs = corp.get_conf('ATTRLIST').split(",")
-        if numofsubcorp > 0:
-            arfmaxprog = 50.0 / numofsubcorp / len(frqattrs)
-            docfmaxprog = 50.0 / numofsubcorp / len([a for a in frqattrs if a in
-                docfattrs] or [None])
-            for path in paths:
-                process_subcorpus (corp, path, frqattrs, arfmaxprog, docfmaxprog)
-    elif len(sys.argv) >= 2 : # process whole corpus
-        corp = manatee.Corpus(sys.argv[1])
-        frqattrs = corp.get_conf('ATTRLIST').split(",")
-        arfmaxprog = 50.0 / len(frqattrs)
-        docfmaxprog = 50.0 / len([a for a in frqattrs if a in docfattrs] or
-                [None])
-        process_corpus (sys.argv[1], frqattrs, arfmaxprog, docfmaxprog)
+        process_def_file (*sys.argv[1:])
     else:
-        print 'Usage: mksubc.py CORPNAME [ SUBCORP_DIR SUBCORP_DEF_FILE|SUBCORP_FILE.SUBC ATTRLIST ]'
+        stat_names = ["frq", "arf", "docf", "fid", "aldf"]
+        print 'Usage: mksubc [-s] CORPUS SUBCORP_DIR SUBCORP_DEF_FILE'
+        print 'Creates subcorpora (*.subc) files according to subcorpus'
+        print 'definition file (see doc/subcdef.txt)\n'
+        print '-s STATS          compute statistics for all FREQLISTATTRS,'
+        print '                  STATS is a comma separated list of statistics,'
+        print '                  which might be one of ' + ", ".join(stat_names)
+        print 'CORPUS            corpus configuration file'
+        print 'SUBCORP_DIR       directory for the .subc to be stored'
+        print 'SUBCORP_DEF_FILE  subcorpus definition file'
 
 # vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

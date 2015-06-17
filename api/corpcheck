@@ -1,0 +1,277 @@
+#!/usr/bin/python
+
+import sys, manatee, subprocess, re, os, urllib2
+
+if len(sys.argv) < 2:
+    print "Usage: %s CORPUS" % sys.argv[0]
+    sys.exit(1)
+corpname = sys.argv[1]
+print "Checking corpus %s:" % corpname
+ec = 0
+
+def fatal(msg):
+    sys.stderr.write("Fatal error: %s\n" % msg)
+    sys.exit(2)
+
+def error(msg):
+    global ec
+    sys.stderr.write("Error: %s\n" % msg)
+    ec = 1
+
+def warning(msg):
+    global ec
+    sys.stderr.write("Warning: %s\n" % msg)
+
+def accessible(url):
+    url = url.strip()
+    try:
+        response = urllib2.urlopen(url)
+        return True
+    except urllib2.HTTPError, err:
+        return bool(err.code == 401) # with 401, it is probably in someone's intranet
+    except:
+        return False
+
+def works(command, some_output=False, no_errors=False, shell=True):
+    p = subprocess.Popen(command, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    if p.returncode != 0:
+        return False
+    if some_output and not out:
+        return False
+    if no_errors and err:
+        return False
+    return True
+
+s = manatee.StrVector()
+manatee.languages(s)
+supported_languages = list(s)
+
+
+
+print " * correct filename format and parseability of the registry file"
+# Check if registry file is readable
+if not works("corpinfo %s" % corpname, no_errors=True):
+    fatal("Corpus not found or registry file corrupted")
+
+# Get basic info
+C = manatee.Corpus(corpname)
+attrs = C.get_conf('ATTRLIST').split(',')
+if [''] == attrs: attrs = []
+structattrs = C.get_conf('STRUCTATTRLIST').split(',')
+if [''] == structattrs: structattrs = []
+structs = C.get_conf('STRUCTLIST').split(',')
+if [''] == structs: structs = []
+subcorpattrs = C.get_conf('SUBCORPATTRS').replace('|', ',').split(',')
+if [''] == subcorpattrs: subcorpattrs = []
+
+# If there is a new version, exit now!
+if C.get_conf('NEWVERSION'):
+    print "Newer version found, skipping."
+    sys.exit(0)
+
+# Check if the file name contains only alphanumeric characters + underscore and does not begin with a digit
+basename = os.path.basename(corpname)
+if not re.match('^[_a-zA-Z][_a-zA-Z0-9]*$', basename):
+    warning("Corpus registry file name should only contain alphanumeric characters + underscore and not begin with a digit")
+
+
+
+print " * basic information"
+# Check if MAINTAINER is set and mailable
+maintainer = C.get_conf('MAINTAINER')
+if not maintainer:
+    warning("MAINTAINER not specified")
+elif '@' not in maintainer:
+    warning("MAINTAINER does not look like an e-mail address")
+
+# Check if encoding is set
+if not C.get_conf('ENCODING'):
+    warning("ENCODING not specified")
+
+# Check if LANGUAGE is set and supported
+language = C.get_conf('LANGUAGE')
+if not language:
+    warning("LANGUAGE not specified")
+else:
+    if language not in supported_languages:
+        error("Language '%s' is not supported" % language)
+
+# Check if INFOHREF is set and accessible
+infohref = C.get_conf('INFOHREF')
+if not infohref:
+    warning("INFOHREF not specified")
+elif not accessible(infohref):
+    warning("Specified INFOHREF not accessible")
+
+# if there is a 'tag' attribute:
+if 'tag' in attrs:
+    # Check if TAGSETDOC is set and accessible
+    tagsetdoc = C.get_conf('TAGSETDOC')
+    if not tagsetdoc:
+        warning("TAGSETDOC not specified")
+    elif not accessible(tagsetdoc):
+        warning("Specified TAGSETDOC not accessible")
+    # Check if WPOSLIST is set
+    if not C.get_conf('WPOSLIST'):
+        warning("WPOSLIST not specified")
+
+# if there is a 'lempos' attribute, check if LPOSLIST is set
+if 'lempos' in attrs and not C.get_conf('LPOSLIST'):
+    warning("LPOSLIST not specified")
+
+
+
+print " * vertical"
+# Check if VERTICAL file exists or if the pipe variant returns something
+if not C.get_conf('VIRTUAL'):
+    vertical = C.get_conf('VERTICAL').strip()
+    if vertical.startswith('|'):
+        if not works(vertical[1:] + '| head', some_output=True): 
+            error("VERTICAL command '%s' produces empty output" % vertical[1:])
+    elif not os.path.isfile(vertical):
+        error("VERTICAL file %s does not exist" % vertical)
+
+
+
+print " * paths"
+wsdef = C.get_conf('WSDEF')
+if wsdef and not os.path.isfile(wsdef):
+    error("WSDEF file %s does not exist" % wsdef)
+wshist = C.get_conf('WSHIST')
+if wshist and not os.path.isfile(wshist):
+    error("WSHIST file %s does not exist" % wshist)
+subcdef = C.get_conf('SUBCDEF')
+if subcdef and not os.path.isfile(subcdef):
+    error("SUBCDEF file %s does not exist" % subcdef)
+gdexconf = C.get_conf('GDEXDEFAULTCONF')
+if gdexconf and not os.path.isfile(gdexconf):
+    error("GDEXDEFAULTCONF file %s does not exist" % gdexconf)
+
+
+
+# For languages with letter case
+if '1' != C.get_conf('NOLETTERCASE'):
+    print " * lowercase attributes"
+    # Check if the corpus contains lc (if it contains word) and lemma_lc (if it contains lemma) attributes
+    if 'word' in attrs and 'lc' not in attrs:
+        warning("Attribute 'word' is present but 'lc' is not!")
+    if 'lemma' in attrs and 'lemma_lc' not in attrs:
+        warning("Attribute 'lemma' is present but 'lemma_lc' is not!")
+    # Check if the dynamic functions are utf8
+    if 'UTF-8' == C.get_conf('ENCODING'):
+        if 'lc' in attrs and C.get_conf('lc.DYNAMIC') == 'lowercase':
+            error("lc.DYNAMIC should be utf8lowercase, not lowercase")
+        if 'lemma_lc' in attrs and C.get_conf('lemma_lc.DYNAMIC') == 'lowercase':
+            error("lemma_lc.DYNAMIC should be utf8lowercase, not lowercase")
+
+
+print " * URL stuff"
+# Check whether the corpus contains DOCSTRUCTURE.{url, tld, t2ld, domain}
+doc = C.get_conf('DOCSTRUCTURE')
+url = doc+'.url'
+tld = doc+'.tld'
+t2ld = doc+'.t2ld'
+urldomain = doc+'.urldomain'
+if url in structattrs:
+    # If there is url, there must be tld, t2ld, and domain.
+    if tld not in structattrs:
+        warning("%s is present but %s is not!" % (url, tld))
+    if t2ld not in structattrs:
+        warning("%s is present but %s is not!" % (url, t2ld))
+    if urldomain not in structattrs:
+        warning("%s is present but %s is not!" % (url, urldomain))
+
+
+
+print " * subcorpattrs"
+if subcorpattrs:
+    # URL stuff in subcorpattrs
+    if url in subcorpattrs:
+        warning("%s is in SUBCORPATTRS!" % url)
+    if tld in structattrs and tld not in subcorpattrs:
+        warning("%s not in SUBCORPATTRS!" % tld)
+    if t2ld in structattrs and t2ld not in subcorpattrs:
+        warning("%s not in SUBCORPATTRS!" % t2ld)
+    if urldomain in structattrs and urldomain not in subcorpattrs:
+        warning("%s not in SUBCORPATTRS!" % urldomain)
+
+
+
+aligned = C.get_conf('ALIGNED')
+if aligned:
+    for aligned_corpus in aligned.split(','):
+        try:
+            manatee.loadCorpInfo(aligned_corpus)
+        except:
+            error('aligned corpus %s missing or broken' % aligned_corpus)
+
+
+
+print " * sizes"
+sizesfile = os.path.join(C.get_conf('PATH'), 'sizes')
+if not os.path.exists(sizesfile):
+    error("Sizes not compiled")
+
+
+print " * lexicon queries"
+# Check that corpquery returns something for the first and last value of each attribute
+for attr in attrs + structattrs:
+    try:
+        attrib = C.get_attr(attr)
+    except:
+        error("Attribute %s not found" % attr)
+        continue
+    if not attrib.id_range() > 0:
+        error("Missing or corrupted lexicon for %s" % attr)
+        continue
+    first = attrib.id2str(0)
+    last = attrib.id2str(attrib.id_range()-1)
+    for value in [first, last]:
+        value = value.replace('\\', '\\\\').replace('"','\\"')
+        if '.' in attr: # struct attribute
+            query = '<%s=="%s">' % (attr.replace('.', ' '), value)
+        else:
+            query = '[%s=="%s"]' % (attr, value)
+        if not works(['corpquery', corpname, query, '-h', '1'], some_output=True, no_errors=True, shell=False):
+            error("Error searching for %s" % query)
+        
+    
+
+print " * gramrels"
+# Verify lexicon
+wsdef = C.get_conf('WSDEF')
+if wsdef:
+    wsbase = C.get_conf('WSBASE')
+    if not works('parws "%s" "%s" "%s" -1 | tail -n 1 | grep "with 0 errors"' % (corpname, wsdef, wsbase)):
+        error("Gramrel lexicon verification ended with errors")
+
+
+
+print " * structure sanity"
+# Check structure sizes and beg/end
+try:
+    csize = C.size()
+except:
+    error("Could not determine corpus size")
+    sys.exit(ec) # skip the following
+for struct in structs:
+    try:
+        s = C.get_struct(struct)
+    except:
+        error("Structure %s not compiled\n" % struct)
+        continue
+    ssize = s.size()
+    if ssize <= 0:
+        error("Invalid size of structure %s\n" % struct)
+        continue
+    x = s.beg(0)
+    if x < 0 or x > csize:
+        error("Invalid begin of first %s\n" % struct)
+    x = s.end(ssize - 1)
+    if x < 0 or x > csize:
+        error("Invalid end of last %s\n" % struct)
+
+
+
+sys.exit(ec)

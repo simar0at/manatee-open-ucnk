@@ -1,11 +1,11 @@
-//  Copyright (c) 1999-2012 Pavel Rychly
+//  Copyright (c) 1999-2013  Pavel Rychly, Milos Jakubicek
 
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <cstdlib>
-#include "corpconfLexer.hpp"
-#include "corpconfParser.hpp"
+#include "corpconfLexer.hh"
+#include "corpconfParser.hh"
 #include "corpconf.hh"
 #include "config.hh"
 
@@ -54,7 +54,7 @@ CorpInfo *loadCorpInfo (const string &corp_name_or_path)
     }
     input.close();
 
-#ifdef ANTLR_34_API
+#ifdef MANATEE_ANTLR_34_API
     pANTLR3_INPUT_STREAM inputStream = antlr3FileStreamNew((pANTLR3_UINT8) config_path.c_str(), ANTLR3_ENC_8BIT);
 #else
     pANTLR3_INPUT_STREAM inputStream = antlr3AsciiFileStreamNew((pANTLR3_UINT8) config_path.c_str());

@@ -1,36 +1,37 @@
 # Process this file with autoconf to produce a configure script.
-# Copyright (c) 2003-2013  Pavel Rychly
+# Copyright (c) 2003-2015  Pavel Rychly, Milos Jakubicek
 
-AC_COPYRIGHT([Copyright (c) 2003-2013, Pavel Rychly])
-AC_INIT(manatee, open-2.83.3, pary@fi.muni.cz)
+AC_COPYRIGHT([Copyright (c) 2003-2015, Pavel Rychly, Milos Jakubicek])
+AC_INIT(manatee, open-2.121.1, pary@fi.muni.cz)
+FINLIB_MINVERSION="2.31"
 AC_CONFIG_AUX_DIR(config)
 AC_CONFIG_MACRO_DIR(config)
-AC_CONFIG_HEADER(config.hh)
 AC_CONFIG_SRCDIR(corp/corpus.hh)
 AM_INIT_AUTOMAKE
-AC_CONFIG_SUBDIRS(libltdl)
-
+AX_PREFIX_CONFIG_H(config.hh, MANATEE, config.hh)
 
 # Checks for programs.
 AC_PROG_CXX
+AC_LANG_CPLUSPLUS
 
 # Check for ln -s, fall back to cp -p
 AC_PROG_LN_S
 
 # Checks for opening shared libraries suite.
-AC_LIBTOOL_DLOPEN
-AC_LIBLTDL_CONVENIENCE
-AC_PROG_LIBTOOL
-AC_SUBST(INCLTDL)
-AC_SUBST(LIBLTDL)
+LT_INIT([dlopen])
+AC_CHECK_LIB([ltdl], [lt_dlinit])
 
-AC_ARG_ENABLE(pthread, [  --disable-pthread    Disable the threading with pthread.],,
+AC_ARG_ENABLE(pthread,[AS_HELP_STRING([--disable-pthread],[disable the threading with pthread])],,
 		    enable_pthread="yes")
 if test "x$enable_pthread" = "xyes" ; then
     AC_DEFINE(HAVE_PTHREAD, 1, [Define to 1 if you have the pthread library])
     PTHREAD_LIBS="-pthread"
 fi
 AC_SUBST(PTHREAD_LIBS)
+AM_CXXFLAGS="-fexceptions -fstack-protector --param=ssp-buffer-size=4"
+AM_CPPFLAGS="-Wall -Wp,-D_FORTIFY_SOURCE=2 -Wno-deprecated"
+AC_SUBST(AM_CXXFLAGS)
+AC_SUBST(AM_CPPFLAGS)
 
 # Checks for header files.
 AC_HEADER_STDC
@@ -60,27 +61,40 @@ esac
 if test -f pcre/configure; then
 	AC_CONFIG_SUBDIRS([pcre])
 	AC_SUBST([PCRE_SUBDIRS],[pcre])
-	AC_SUBST([PCRE_LDFLAG],[['$(top_builddir)'/pcre/libpcre.la]])
-	CPPFLAGS="$CPPFLAGS -I\$(top_srcdir)/pcre"
+	AC_SUBST([PCRE_LDFLAG],[["$top_builddir"/pcre/libpcre.la]])
+	CPPFLAGS="$CPPFLAGS -I${top_srcdir}/pcre"
 else
-	AC_SUBST([PCRE_LDFLAG],[-lpcre])
+	AC_CHECK_LIB([pcre],[regcomp],[AC_SUBST([PCRE_LDFLAG],[-lpcre])])
 fi
 AC_MSG_NOTICE([PCRE from $PCRE_LDFLAG])
 
-# FinLib 
-if test -f finlib2/configure; then
+# FinLib
+AC_ARG_WITH([finlib],[AS_HELP_STRING([--with-finlib=[[PATH]]], use finlib from (absolute) PATH)])
+if test $with_finlib; then
+	flags="-L${with_finlib}/finlib -L${with_finlib}/finlib/.libs/ -Wl,-rpath,${with_finlib}/finlib/.libs/ -Wl,-rpath,${with_finlib}/finlib/ -lfin"
+	saved_LDFLAGS=$LDFLAGS
+	LDFLAGS="$LDFLAGS $flags"
+	CPPFLAGS="$CPPFLAGS -I${with_finlib}"
+	AC_CHECK_HEADER(finlib/config.hh,,[AC_MSG_ERROR([no finlib/config.hh found])])
+	AC_CHECK_LIB([fin],[finlib_version],[AC_SUBST([FINLIB_LDFLAG],[$flags])],[AC_MSG_ERROR([no Finlib found])])
+else if test -f finlib2/configure; then
 	AC_CONFIG_SUBDIRS([finlib2])
 	AC_SUBST([FINLIB_SUBDIRS],[finlib2])
-	AC_SUBST([FINLIB_LDFLAG],[['$(top_builddir)'/finlib2/finlib/libfin.la]])
-	CPPFLAGS="$CPPFLAGS -I\$(top_srcdir)/finlib2"
+	AC_SUBST([FINLIB_LDFLAG],[["$top_builddir"/finlib2/finlib/libfin.la]])
+	CPPFLAGS="$CPPFLAGS -I${top_srcdir}/finlib2"
 else if test -f ../finlib2/finlib/libfin.la; then
 	AC_SUBST([FINLIB_LDFLAG],[$(top_srcdir)/../finlib2/finlib/libfin.la])
 	CPPFLAGS="$CPPFLAGS -I../../finlib2"
 else
-	AC_SUBST([FINLIB_LDFLAG],[-lfin])
+	AC_CHECK_HEADER(finlib/config.hh,,[AC_MSG_ERROR([no finlib/config.hh found])])
+	AC_CHECK_LIB([fin],[finlib_version],[AC_SUBST([FINLIB_LDFLAG],[-lfin])],[AC_MSG_ERROR([no Finlib found])])
+fi
 fi
 fi
 AC_MSG_NOTICE([finlib from $FINLIB_LDFLAG])
+AX_ABSOLUTE_HEADER([finlib/config.hh])
+FINLIB_VERSION=`grep '#define *FINLIB_VERSION' $gl_cv_absolute_finlib_config_hh | sed 's#.*FINLIB_VERSION *"\([^"]\+\)".*#\1#'`
+AX_COMPARE_VERSION($FINLIB_VERSION,[ge],$FINLIB_MINVERSION,[AC_MSG_NOTICE([Found Finlib version $FINLIB_VERSION])],[AC_MSG_ERROR([Need Finlib version >= $FINLIB_MINVERSION, found $FINLIB_VERSION])])
 
 # Antlr
 if test -f antlr/Makefile.am; then
@@ -97,7 +111,7 @@ else
 	AX_ABSOLUTE_HEADER([antlr3config.h])
 	ANTLR_VERSION=`grep PACKAGE_VERSION $gl_cv_absolute_antlr3config_h | sed 's#.*PACKAGE_VERSION *"\([^"]\+\)".*#\1#'`
 	AX_COMPARE_VERSION([$ANTLR_VERSION],[ge],[3.2],[AC_MSG_NOTICE([Found Antlr version $ANTLR_VERSION])],[AC_MSG_ERROR([Need Antlr version >= 3.2])])
-	AX_COMPARE_VERSION([$ANTLR_VERSION],[ge],[3.4],[AC_DEFINE([ANTLR_34_API], [1], [Uses antlr >= 3.4 API])])
+	AX_COMPARE_VERSION([$ANTLR_VERSION],[ge],[3.4],[AC_DEFINE([ANTLR_34_API], [1], [Uses antlr >= 3.4 API])],[AC_MSG_WARN([Compiling with ANTLR < 3.4 prevents using regular expression optimizations on UTF-8 encoded corpora])])
 fi
 AC_MSG_NOTICE([Antlr from $ANTLR_LDFLAG])
 
@@ -105,7 +119,7 @@ AC_MSG_NOTICE([Antlr from $ANTLR_LDFLAG])
 AC_PATH_PROGS(SWIG, [swig-1.3 swig])
 
 # Python
-AC_ARG_ENABLE(python, [  --disable-python    Disable the python API.],,
+AC_ARG_ENABLE(python,[AS_HELP_STRING([--disable-python],[disable the python API])],,
 		    enable_python="yes")
 if test "x$enable_python" = "xyes" ; then
     AM_PATH_PYTHON
@@ -130,8 +144,7 @@ fi
 AM_CONDITIONAL([PYTHON_API_ENABLED], [test "x$enable_python" = "xyes"])
 
 # Java
-AC_ARG_ENABLE(java, [  --disable-java      Disable the java API.],,
-		    enable_java="yes")
+AC_ARG_ENABLE(java,[AS_HELP_STRING([--enable-java],[enable the java API])],enable_java="yes",)
 if test "x$enable_java" = "xyes"; then
     if test -z "$JAVA_CPPFLAGS" ; then
         AC_JNI_INCLUDE_DIR
@@ -147,8 +160,7 @@ fi
 AM_CONDITIONAL([JAVA_API_ENABLED], [test "x$enable_java" = "xyes"])
 
 # Ruby
-AC_ARG_ENABLE(ruby, [  --disable-ruby      Disable the ruby API.],,
-		    enable_ruby="yes")
+AC_ARG_ENABLE(ruby,[AS_HELP_STRING([--enable-ruby],[enable the ruby API])],enable_ruby="yes",)
 if test "x$enable_ruby" = "xyes"; then
 	# locate ruby binary, CPPFLAGS and site directory
 	AX_RUBY_DEVEL()
@@ -163,8 +175,7 @@ fi
 AM_CONDITIONAL([RUBY_API_ENABLED], [test "x$enable_ruby" = "xyes"])
 
 # Perl
-AC_ARG_ENABLE(perl, [  --disable-perl      Disable the perl API.],,
-		    enable_perl="yes")
+AC_ARG_ENABLE(perl,[AS_HELP_STRING([--enable-perl],[enable the perl API])],enable_perl="yes",)
 if test "x$enable_perl" = "xyes"; then
 	# locate perl binary
 	AX_WITH_PERL
@@ -196,18 +207,13 @@ if test "x$enable_perl" = "xyes"; then
 fi
 AM_CONDITIONAL([PERL_API_ENABLED], [test "x$enable_perl" = "xyes"])
 
-
-# local development with bzr
-AM_CONDITIONAL(LOCALBZR, [test -d .bzr || test -d ../.git])
-
 # MANATEE_REGISTRY environment variable
 AC_ARG_VAR(MANATEE_REGISTRY, [default MANATEE_REGISTRY path])
 AM_CONDITIONAL(MANATEE_REGISTRY_STR, test -n "$MANATEE_REGISTRY")
 
 regexplib=pcre
 # --with-icu
-AC_ARG_WITH(icu,
-[  --with-icu          Use ICU locales [[default no]]],
+AC_ARG_WITH(icu,[AS_HELP_STRING([--with-icu],[use ICU locales [default no]])],
 [
   if test $with_icu = yes; then
      AC_DEFINE(USE_ICU, 1, [Use ICU locales instead of Unix ones (setlocale)])
@@ -226,16 +232,15 @@ fi
 AC_MSG_NOTICE([regexp from $REGEX_LDFLAG])
 
 
-AC_DEFINE_UNQUOTED(MANATEE_VERSION_STR, ["$PACKAGE_VERSION"], [Manatee version number])
-AC_DEFINE_UNQUOTED(MANATEE_VERSION_STR, ["$PACKAGE_VERSION"], [Manatee version number])
+AC_DEFINE_UNQUOTED(VERSION_STR, ["$PACKAGE_VERSION"], [Manatee version number])
+AC_DEFINE_UNQUOTED(VERSION_STR, ["$PACKAGE_VERSION"], [Manatee version number])
 
-AC_ARG_ENABLE(cxxlib,
-[  --enable-cxxlib         install C++ library],
+AC_ARG_ENABLE(cxxlib,[AS_HELP_STRING([--enable-cxxlib],[install C++ libraries])],
 [
    case "${enableval}" in
        yes) cxxlib=true 
-	AC_DEFINE(MANATEE_CXXLIB, 1, [install C++ library])
-	AC_MSG_NOTICE([installation will include C++ library])
+	AC_DEFINE(CXXLIB, 1, [install C++ libraries])
+	AC_MSG_NOTICE([installation will include C++ libraries])
 	;;
        no)  cxxlib=false ;;
        *) AC_MSG_ERROR(bad value ${enableval} for --enable-cxxlib) ;;

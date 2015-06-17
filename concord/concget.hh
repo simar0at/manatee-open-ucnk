@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2013  Pavel Rychly, Milos Jakubicek
 
 #ifndef CONCGET_HH
 #define CONCGET_HH

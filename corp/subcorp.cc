@@ -1,7 +1,8 @@
-//  Copyright (c) 2002-2011  Pavel Rychly
+//  Copyright (c) 2002-2015  Pavel Rychly, Milos Jakubicek
 
 #include "subcorp.hh"
 #include "frsop.hh"
+#include "cqpeval.hh"
 #include <finlib/fromtof.hh>
 #include <dirent.h>
 #include <iostream>
@@ -10,10 +11,46 @@
 
 using namespace std;
 
-SubCorpus::SubCorpus(const Corpus *corp, const string &sub)
-    : Corpus (corp->conf), search_size_cached (0), 
-      subcorp (create_ranges (sub, "map64"))
+class FilterIDPosIterator: public IDPosIterator {
+    IDPosIterator *it;
+    RangeStream *rs;
+    NumOfPos delta;
+    bool is_end;
+public:
+    FilterIDPosIterator (IDPosIterator *it, RangeStream *rs):
+        it (it), rs (rs), delta (rs->peek_beg()), is_end (false) {locate();}
+    ~FilterIDPosIterator() {delete it; delete rs;}
+    void next() {it->next(); locate();}
+    Position peek_pos() {return it->peek_pos();}
+    NumOfPos get_delta() {return delta;}
+    int peek_id() {return it->peek_id();}
+    bool end() {return is_end || it->end();}
+protected:
+    void locate() {
+        if (it->end())
+            return;
+        while (it->peek_pos() >= rs->peek_end() && !rs->end()) {
+            Position last_end = rs->peek_end();
+            rs->next();
+            delta += rs->peek_beg() - last_end;
+        }
+        if (rs->end()) {
+            is_end = true;
+            return;
+        }
+        while (it->peek_pos() < rs->peek_beg() && !it->end())
+            it->next();
+    }
+};
+
+SubCorpus::SubCorpus(const Corpus *corp, const string &sub, bool complement)
+    : Corpus (corp->conf), search_size_cached (0),
+      subcorp (create_ranges (sub, "map64")), complement (complement)
 {
+    conf->opts["SUBCPATH"] = sub;
+    size_t dot = conf->opts["SUBCPATH"].find_last_of(".");
+    if (dot != string::npos && dot != conf->opts["SUBCPATH"].size() - 1)
+        conf->opts["SUBCPATH"].erase(dot + 1, string::npos);
 }
 
 SubCorpus::~SubCorpus ()
@@ -23,7 +60,15 @@ SubCorpus::~SubCorpus ()
 
 RangeStream *SubCorpus::filter_query(RangeStream *s)
 {
-    return new RQinNode (s, subcorp->whole());
+    RangeStream *subc = subcorp->whole();
+    if (complement)
+        subc = RQoutsideNode::create (subc, search_size());
+    return new RQinNode (s, subc);
+}
+
+IDPosIterator *SubCorpus::filter_idpos (IDPosIterator *it)
+{
+    return new FilterIDPosIterator (it, subcorp->whole());
 }
 
 NumOfPos SubCorpus::search_size()
@@ -34,7 +79,10 @@ NumOfPos SubCorpus::search_size()
         do {
             sum += s->peek_end() - s->peek_beg();
         } while (s->next());
-        search_size_cached = sum;
+        if (complement)
+            search_size_cached = size() - sum;
+        else
+            search_size_cached = sum;
     }
     return search_size_cached;
 }
@@ -42,10 +90,6 @@ NumOfPos SubCorpus::search_size()
 string SubCorpus::get_info()
 {
     return "";
-}
-
-NumOfPos SubCorpus::compute_docf(FastStream *poss, RangeStream *struc) {
-    return Corpus::compute_docf(poss, filter_query(struc));
 }
 
 static inline bool isDir (const char *path)
@@ -56,13 +100,15 @@ static inline bool isDir (const char *path)
     return S_ISDIR (st.st_mode);
 }
 
-void save_subcorpus (const char *subcpath, FastStream *src, Corpus *corp,
-                     ranges *struc)
+bool create_subcorpus (const char *subcpath, RangeStream *r, Structure *struc)
 {
+    if (struc)
+        r = new RQcontainNode (struc->rng->whole(), r);
+    if (r->end()) {
+        delete r;
+        return false;
+    }
     ToFile<int64_t> outf (subcpath);
-    RangeStream *r = corp->filter_query (struc->part(src));
-    if (r->end())
-        return;
     outf (r->peek_beg());
     Position lastend = r->peek_end();
     while (r->next()) {
@@ -75,24 +121,15 @@ void save_subcorpus (const char *subcpath, FastStream *src, Corpus *corp,
     }
     outf(lastend);
     delete r;
+    return true;
 }
 
-SubCorpus *create_subcorpus (const char *subcdir, const string &corpname,
-                             const string &subcname, FastStream *src, 
-                             Corpus *corp, ranges *struc)
+bool create_subcorpus (const char *subcpath, Corpus *c,
+                       const char *structname, const char *query)
 {
-    string path = subcdir + ("/" + corpname);
-    if (! isDir (path.c_str())) {
-        if (mkdir (path.c_str()
-#if ! defined __MINGW32__
-                   , S_IRWXU |S_IRWXG
-#endif
-                   ))
-            throw FileAccessError (path, "create_subc: mkdir");
-    }
-    path += "/" + subcname + ".subc";
-    save_subcorpus (path.c_str(), src, corp, struc);
-    return new SubCorpus (corp, path);
+    Structure *struc = c->get_struct (structname);
+    FastStream *fs = eval_cqponepos ((string (query) + ';').c_str(), struc);
+    return create_subcorpus (subcpath, c->filter_query (struc->rng->part (fs)));
 }
 
 void find_subcorpora (const char *subcdir, 
@@ -126,6 +163,91 @@ void find_subcorpora (const char *subcdir,
         }
     }
     closedir (dp);
+}
+
+// -------------------SubCorpPosAttr -----------------------
+
+#define GET_FREQ(freqf, func) \
+    if (freqf) { \
+        NumOfPos freq = (*(freqf))[id]; \
+        if (complement) \
+            return attr->func (id) - freq; \
+        return freq; \
+    } else \
+        return -1LL;
+
+template <class NormClass=MapBinFile<int64_t>,
+          class FreqClass=MapBinFile<uint32_t>,
+          class FloatFreqClass=MapBinFile<float> >
+class SubCorpPosAttr : public PosAttr
+{
+    PosAttr *attr;
+    NormClass *normf, *freq64f;
+    FreqClass *freqf, *docff;
+    FloatFreqClass *arff, *aldff;
+    bool complement;
+public:
+    SubCorpPosAttr (PosAttr *pa, const string &subcpath, bool complement)
+        : PosAttr (pa->attr_path, pa->name, pa->locale, pa->encoding),
+          attr (pa), normf (NULL), freq64f (NULL), freqf (NULL), docff (NULL),
+          arff (NULL), aldff (NULL), complement (complement)
+    {
+        const string path = subcpath + pa->name;
+        try {
+            freqf = new FreqClass (path + ".frq");
+        } catch (FileAccessError) {
+            try {
+                freq64f = new NormClass (path + ".frq64");
+            } catch (FileAccessError) {}
+        }
+        try {
+            normf = new NormClass (path + ".norm");
+        } catch (FileAccessError) {}
+        try {
+            docff = new FreqClass (path + ".docf");
+        } catch (FileAccessError) {}
+        try {
+            arff = new FloatFreqClass (path + ".arf");
+        } catch (FileAccessError) {}
+        try {
+            aldff = new FloatFreqClass (path + ".aldf");
+        } catch (FileAccessError) {}
+    }
+    virtual ~SubCorpPosAttr () {
+        delete attr;
+        delete freqf; delete freq64f;
+        delete normf; delete docff; delete arff; delete aldff;
+    }
+    virtual int id_range () {return attr->id_range();}
+    virtual const char* id2str (int id) {return attr->id2str (id);}
+    virtual int str2id (const char *str) {return attr->str2id (str);}
+    virtual int pos2id (Position pos) {return attr->pos2id (pos);}
+    virtual const char* pos2str (Position pos) {return attr->pos2str (pos);}
+    virtual IDIterator *posat (Position pos) {return attr->posat (pos);}
+    virtual IDPosIterator *idposat (Position pos) {return attr->idposat (pos);}
+    virtual TextIterator *textat (Position pos) {return attr->textat (pos);}
+    virtual FastStream *id2poss (int id) {return attr->id2poss(id);}
+    virtual FastStream *regexp2poss (const char *pat, bool ignorecase)
+            {return attr->regexp2poss (pat, ignorecase);}
+    virtual FastStream *compare2poss (const char *pat, int cmp, bool ignorecase)
+            {return attr->compare2poss (pat, cmp, ignorecase);}
+    virtual Generator<int> *regexp2ids (const char *pat, bool ignorecase,
+                                        const char *filter_pat = NULL)
+            {return attr->regexp2ids (pat, ignorecase, filter_pat);}
+    virtual NumOfPos size() {return attr->size();}
+    // non-forwarding methods follow
+    virtual NumOfPos freq (int id) {if (freqf) {GET_FREQ (freqf, freq)}
+                                    else {GET_FREQ (freq64f, freq)}}
+    virtual NumOfPos docf (int id) {GET_FREQ (docff, docf)}
+    virtual float arf (int id) {GET_FREQ (arff, arf)}
+    virtual float aldf (int id) {GET_FREQ (aldff, aldf)}
+    virtual NumOfPos norm (int id) {if (normf) {GET_FREQ (normf, norm)}
+                                    else return freq (id);}
+};
+
+PosAttr * createSubCorpPosAttr (PosAttr *pa, const string &subcpath,
+                                bool complement) {
+    return new SubCorpPosAttr<> (pa, subcpath, complement);
 }
 
 // vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

@@ -1,4 +1,4 @@
-// Copyright (c) 2004-2011  Pavel Rychly
+// Copyright (c) 2004-2011  Pavel Rychly, Milos Jakubicek
 
 #include <finlib/fromtof.hh>
 #include "corpus.hh"

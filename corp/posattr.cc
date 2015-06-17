@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2011  Pavel Rychly
+//  Copyright (c) 1999-2015  Pavel Rychly, Milos Jakubicek
 
 #include <finlib/lexicon.hh>
 #include <finlib/revidx.hh>
@@ -6,6 +6,8 @@
 #include <finlib/regexplex.hh>
 #include "posattr.hh"
 #include "pauniq.hh"
+#include "dynattr.hh"
+#include "regexopt.hh"
 #include <set>
 
 using namespace std;
@@ -40,7 +42,9 @@ const char *encoding2c_str (const string &encoding)
 //-------------------- GenPosAttr<RevClass,TextClass> --------------------
 
 template <class RevClass, class TextClass, class LexClass, 
-          class NormClass=MapBinFile<int64_t> >
+          class NormClass=MapBinFile<int64_t>,
+          class FreqClass=MapBinFile<uint32_t>,
+          class FloatFreqClass=MapBinFile<float> >
 class GenPosAttr : public PosAttr
 {
 public:
@@ -62,20 +66,36 @@ public:
     TextClass txt;
     RevClass rev;
     NormClass *normf;
+    FreqClass *docff;
+    FloatFreqClass *arff, *aldff;
+    PosAttr *regex;
     
     GenPosAttr (const string &path, const string &n, const string &locale, 
                 const string &encoding, NumOfPos text_size=0)
         :PosAttr (path, n, locale, encoding), lex (path), 
-         txt (path, text_size), rev (path, txt.size()), normf(0)
+         txt (path, text_size), rev (path, txt.size()), normf (NULL),
+         docff (NULL), arff (NULL), aldff (NULL), regex (NULL)
     {
         try {
             normf = new NormClass (path + ".norm");
-        } catch (FileAccessError) {
-        }
+        } catch (FileAccessError) {}
+        try {
+            docff = new FreqClass (path + ".docf");
+        } catch (FileAccessError) {}
+        try {
+            arff = new FloatFreqClass (path + ".arf");
+        } catch (FileAccessError) {}
+        try {
+            aldff = new FloatFreqClass (path + ".aldf");
+        } catch (FileAccessError) {}
+        try {
+            DynFun *fun = createDynFun ("", "internal", "lowercase"); // lowercase = dummy here
+            regex = createDynAttr ("index", path + ".regex", n + ".regex", fun,
+                                   this, locale, false);
+        } catch (FileAccessError) {}
     }
-    virtual ~GenPosAttr () {
-        if (normf) delete normf;
-    }
+    virtual ~GenPosAttr ()
+        {delete normf; delete docff; delete arff; delete aldff; delete regex;}
 
     virtual int id_range () {return lex.size();}
     virtual const char* id2str (int id) {return lex.id2str (id);}
@@ -84,16 +104,32 @@ public:
     virtual const char* pos2str (Position pos) 
         {return lex.id2str (txt.pos2id (pos));}
     virtual IDIterator *posat (Position pos) {return new IDIter (txt.at (pos));}
+    virtual IDPosIterator *idposat (Position pos)
+        {return new IDPosIterator (new IDIter (txt.at (pos)),
+                                   new SequenceStream (pos, size()-1, size()));}
     virtual TextIterator *textat (Position pos) 
         {return new TextIter (txt.at (pos), lex);}
     virtual FastStream *id2poss (int id) {return rev.id2poss (id);}
     virtual FastStream *compare2poss (const char *pat, int cmp, bool ignorecase) 
         {return ::compare2poss (rev, lex, pat, cmp, ignorecase);}
-    virtual FastStream *regexp2poss (const char *pat, bool ignorecase)
-        {return ::regexp2poss (rev, lex, pat, locale, encoding, ignorecase);}
-    virtual Generator<int> *regexp2ids (const char *pat, bool ignorecase, const char *filter_pat)
-        {return ::regexp2ids (lex, pat, locale, encoding, ignorecase, filter_pat);}
+    virtual FastStream *regexp2poss (const char *pat, bool ignorecase) {
+        if (regex) {
+            FastStream *fs = optimize_regex (regex, pat, encoding);
+            return ::regexp2poss (rev, lex, pat, locale, encoding, ignorecase, fs);
+        }
+        return ::regexp2poss (rev, lex, pat, locale, encoding, ignorecase);
+    }
+    virtual Generator<int> *regexp2ids (const char *pat, bool ignorecase, const char *filter_pat) {
+        if (regex) {
+            FastStream *fs = optimize_regex (regex, pat, encoding);
+            return ::regexp2ids (lex, pat, locale, encoding, ignorecase, filter_pat, fs);
+        }
+        return ::regexp2ids (lex, pat, locale, encoding, ignorecase, filter_pat);
+    }
     virtual NumOfPos freq (int id) {return rev.count (id);}
+    virtual NumOfPos docf (int id) {return docff ? (*docff)[id] : -1LL;}
+    virtual float arf (int id) {return arff ? (*arff)[id] : -1LL;}
+    virtual float aldf (int id) {return aldff ? (*aldff)[id] : -1LL;}
     virtual NumOfPos norm (int id) {return normf ? (*normf)[id] : freq (id);}
     virtual NumOfPos size() {return txt.size();}
 };
@@ -119,19 +155,8 @@ typedef GenPosAttr<file_delta_revidx, file_giga_delta_text, map_lexicon>
         FD_FGD_PosAttr;
 typedef GenPosAttr<file_file_delta_revidx, file_file_giga_delta_text, 
                    map_lexicon, BinFile<int> > NoMem_PosAttr;
-//gen_map_lexicon<BinFile<int> >
 typedef GenPosAttr<map_delta_revidx, int_text, map_lexicon> MD_MI_PosAttr;
 typedef GenPosAttr<file_delta_revidx, int_text, map_lexicon> FD_MI_PosAttr;
-typedef GenPosAttr<map_int_revidx, map_delta_text, map_lexicon> MI_MD_PosAttr;
-typedef GenPosAttr<cqp_revidx, map_delta_text, map_lexicon> C_MD_PosAttr;
-typedef GenPosAttr<cqp_revidx, cqp_text, map_lexicon> C_SC_PosAttr;
-typedef GenPosAttr<orig_cqp_revidx, cqp_text, map_lexicon> CQP_PosAttr;
-
-//map_huff_text
-//file_huff_text
-//file_delta_text
-//map_delta_text
-//cqp_text
 
 PosAttr *createPosAttr (string &typecode, const string &path, const string &n,
                         const string &locale, const string &encoding, 
@@ -152,12 +177,8 @@ PosAttr *createPosAttr (string &typecode, const string &path, const string &n,
     else TEST_CODE (FD_FBD);
     else TEST_CODE (FD_FGD);
     else TEST_CODE (NoMem);
-    else TEST_CODE (MI_MD);
     else TEST_CODE (MD_MI);
     else TEST_CODE (FD_MI);
-    else TEST_CODE (C_MD);
-    else TEST_CODE (C_SC);
-    else TEST_CODE (CQP);
     else throw AttrNotFound ("Uknown type: " + typecode + ", " + path);
 
 #undef TEST_CODE

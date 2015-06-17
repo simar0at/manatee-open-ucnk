@@ -1,4 +1,4 @@
-//  Copyright (c) 2003-2013  Pavel Rychly
+//  Copyright (c) 2003-2014  Pavel Rychly, Milos Jakubicek
 
 #include <finlib/fromtof.hh>
 #include <cstdlib>
@@ -20,7 +20,7 @@ enum {conctype_creating, conctype_ok};
  * [1]  14      1             char        added_align? (0 - no, 1 - yes)
  * [2]  15      1             char        is finished? (0 - no, 1 - yes)
  * [3]  16-23   8             NumOfPos    full size
- * [4]  24-31   8             int64_t     file size
+ * [4]  24-31   8             int64_t     file size; not used anymore
  * [5]  32-35   4             ConcIndex   concordance size         ____________________________
  * [6]  36-39   4             ConcIndex   concordance segment size                             |*2)
  * [7]  ...     [6]*2*8       ConcItem    concordance ranges                                   |
@@ -40,47 +40,68 @@ enum {conctype_creating, conctype_ok};
  * [21] ...     [20]*2        short int   linegroup data ______________________________________|
  *
  * *1) may repeat for further collocations
- * *2) may repeat for further segements, each created by a call to save()
+ * *2) may repeat for further segments, each created by a call to save()
  *     with append=true
  * *3) may repeat for further aligned corpora
  */
 
-Concordance::Concordance (Corpus *corp, const char *filename)
-    : rng (NULL), allocated (0), used (0), view (NULL), linegroup (NULL),
-      rng_mutex (NULL), thread_id (NULL), query (NULL), corp (corp),
-      corp_size (corp->size()), label (0), added_align (false)
-{
-    FILE *f = fopen (filename, "rb");
+Concordance::Concordance (Corpus *corp, int fileno) {
+    stringstream fname;
+    fname << "<file descriptor:" << fileno << ">";
+    load_file (corp, fdopen (fileno,  "rb"), fname.str());
+}
+
+Concordance::Concordance (Corpus *corp, const char *filename) {
+    load_file (corp, fopen (filename, "rb"), filename);
+}
+
+void Concordance::load_file (Corpus *corpus, FILE *f, const string fname) {
+    const char *filename = fname.c_str();
+    rng = NULL;
+    allocated = 0;
+    used = 0;
+    view = NULL;
+    linegroup = NULL;
+    rng_mutex = NULL;
+    thread_id = NULL;
+    query = NULL;
+    corp = corpus;
+    label = 0;
+    corp_size = corp->size();
+    added_align = false;
+
     if (!f)
         throw FileAccessError (filename, "Concordance::Concordance");
-    {
-        // check signature & type
-        FromFile<char> ff(f);
-        for (int i = 0; i < sizeof(concsignature); i++) {
-            if (concsignature[i] != ff.get())
-                throw ConcNotFound (filename);
-        }
-        added_align = ff.get() == '\1';
-        if (ff.get() != conctype_ok)
-            is_finished = false;
-        else
-            is_finished = true;
-    }
+    // check signature & type
+    char buff[16];
+    size_t ret_read = fread (&buff, sizeof (buff), 1, f);
+    if (ret_read != 1)
+        throw FileAccessError (filename, "Cannot read signature");
+    if (strncmp(buff, concsignature, 16))
+        throw ConcNotFound (filename);
+    added_align = buff[14] == '\1';
+    if (buff[15] != conctype_ok)
+        is_finished = false;
+    else
+        is_finished = true;
     int64_t file_size;
     ConcIndex size;
     fread (&full_size, sizeof (full_size), 1, f);
-    fread (&file_size, sizeof (file_size), 1, f);
+    fread (&file_size, sizeof (file_size), 1, f); // not used anymore
     fread (&size, sizeof (size), 1, f);
     if (!size)
         return;
 
+
     int part = 0;
-    while (ftell (f) < file_size) {
-        fread (&allocated, sizeof (allocated), 1, f);
+    while (1) {
+        ret_read = fread (&allocated, sizeof (allocated), 1, f);
+        if (ret_read != 1)
+            break;
         rng = (ConcItem *) realloc (rng, (used + allocated)
                                           * sizeof (ConcItem));
         size_t read = fread (rng + used, sizeof (ConcItem), allocated, f);
-        if (read != allocated) {
+        if ((ConcIndex) read != allocated) {
             stringstream msg;
             msg << "Concordance corrupted (part " << part << ": expected "
                 << allocated << " items, got " << read << ")";
@@ -90,21 +111,24 @@ Concordance::Concordance (Corpus *corp, const char *filename)
         // view
         ConcIndex csize;
         fread (&csize, sizeof (csize), 1, f);
-        // FromFile can seek to a wrong place
-        off_t after_view = ftell(f) + csize * sizeof(ConcIndex);
-        if (csize && !feof(f)) {
+        if (csize) {
+            ConcIndex* view_buf = new ConcIndex[csize];
+            ret_read = fread (view_buf, sizeof (ConcIndex), csize, f);
+            if ((ConcIndex) ret_read != csize) {
+                stringstream msg;
+                msg << "Concordance corrupted (part " << part << ": expected "
+                    << csize << " view items, got " << ret_read << ")";
+                throw FileAccessError (filename, msg.str());
+            }
             if (!view)
                 view = new vector<ConcIndex>();
-            view->reserve (csize + view->size());
-            FromFile<ConcIndex> ff (f);
-            while (csize--)
-                view->push_back (ff.get());
+            view->insert (view->end(), view_buf, view_buf + csize);
+            delete[] view_buf;
         }
-        fseek (f, after_view, SEEK_SET);
 
         // collocations
         fread (&csize, sizeof (csize), 1, f);
-        int concnum = 0;
+        unsigned concnum = 0;
         while (csize && !feof(f)) {
             collocitem *ci = NULL;
             ConcIndex co = 0;
@@ -125,11 +149,11 @@ Concordance::Concordance (Corpus *corp, const char *filename)
         }
 
         // aligned corpora
-        int16_t al_num = 0;
+        uint16_t al_num = 0;
         fread (&al_num, sizeof (al_num), 1, f);
         while (al_num > aligned.size())
             aligned.push_back (new CorpData());
-        for (int i = 0; i < aligned.size(); i++) {
+        for (unsigned i = 0; i < aligned.size(); i++) {
             stringstream ss;
             char c;
             while ((c = fgetc(f)) != '\0')
@@ -140,11 +164,11 @@ Concordance::Concordance (Corpus *corp, const char *filename)
                 cdata->added_align = true;
                 corpname.erase(corpname.size() - 1);
             }
-            for (int j = 0; j < corp->aligned.size(); j++) {
-                if (corp->aligned [j].first == corpname) {
-                    if (!corp->aligned [j].second)
-                        corp->aligned [j].second = new Corpus (corpname);
-                    cdata->corp = corp->aligned [j].second;
+            for (unsigned j = 0; j < corp->aligned.size(); j++) {
+                if (corp->aligned [j].corp_name == corpname) {
+                    if (!corp->aligned [j].corp)
+                        corp->aligned [j].corp = new Corpus (corpname);
+                    cdata->corp = corp->aligned [j].corp;
                     break;
                 }
             }
@@ -157,7 +181,7 @@ Concordance::Concordance (Corpus *corp, const char *filename)
             cdata->rng = (ConcItem *) realloc (cdata->rng, (used + allocated)
                                                            * sizeof (ConcItem));
             size_t read = fread (cdata->rng + used, sizeof (ConcItem), allocated, f);
-            if (read != allocated) {
+            if (int(read) != allocated) {
                 stringstream msg;
                 msg << "Aligned concordance " << i << " corrupted (part "
                     << part << ": expected " << allocated << " items, got "
@@ -166,7 +190,7 @@ Concordance::Concordance (Corpus *corp, const char *filename)
             }
             // aligned collocations
             fread (&csize, sizeof (csize), 1, f);
-            int concnum = 0;
+            unsigned concnum = 0;
             while (csize && !feof(f)) {
                 collocitem *ci = NULL;
                 ConcIndex co = 0;
@@ -189,12 +213,20 @@ Concordance::Concordance (Corpus *corp, const char *filename)
         // linegroup
         fread (&csize, sizeof (csize), 1, f);
         if (csize) {
+            linegroup_t::value_type* lngroup_buf = new linegroup_t::value_type[csize];
+            ret_read = fread (lngroup_buf, sizeof (linegroup_t::value_type),
+                              csize, f);
+            if (((ConcIndex) ret_read) != csize) {
+                stringstream msg;
+                msg << "Concordance corrupted (part " << part << ": expected "
+                    << csize << " linegroup items, got " << ret_read << ")";
+                throw FileAccessError (filename, msg.str());
+            }
             if (!linegroup)
                 linegroup = new linegroup_t();
-            linegroup->reserve (csize + linegroup->size());
-            FromFile<short int> ff (f);
-            while (csize--)
-                linegroup->push_back (ff.get());
+            linegroup->insert (linegroup->end(), lngroup_buf,
+                               lngroup_buf + csize);
+            delete[] lngroup_buf;
         }
         used += read;
         part++;
@@ -209,20 +241,48 @@ Concordance::Concordance (Corpus *corp, const char *filename)
     fclose (f);
 }
 
+void Concordance::save (int fileno, bool save_linegroup, bool partial,
+                        bool append) {
+    save (fdopen (fileno,  "wb"), static_cast<ostringstream*>(&(ostringstream()
+          << "<file descriptor:" << fileno << ">"))->str().c_str(),
+          save_linegroup, partial, append);
+}
 
 void Concordance::save (const char *filename, bool save_linegroup, bool partial,
-                        bool append)
+                        bool append) {
+    save (fopen (filename, "wb"), filename, save_linegroup, partial, append);
+}
+
+void write_header (FILE *f, bool added_align, bool finished, NumOfPos fullsize,
+                   ConcIndex size) {
+    char add = (added_align ? '\1' : '\0');
+    fwrite (&add, 1, 1, f);
+    char conctype;
+    if (finished)
+        conctype = conctype_ok;
+    else
+        conctype = conctype_creating;
+    fwrite (&conctype, sizeof (conctype), 1, f);
+    fwrite (&fullsize, sizeof (fullsize), 1, f);
+    int64_t file_size = 0; // not used anymore
+    fwrite (&file_size, sizeof (file_size), 1, f);
+    fwrite (&size, sizeof (size), 1, f);
+}
+
+void Concordance::save (FILE *f, const char *filename, bool save_linegroup,
+                        bool partial, bool append)
 {
     if (!partial)
         sync();
     else
         lock();
-    FILE *f;
     ConcIndex curr_used = used; // always use curr_used, used may change
     ConcIndex old_size = 0;
     ConcIndex added = curr_used;
     if (append) {
-        f = fopen (filename, "r+b");
+        FILE *ff = f;
+        f = fdopen (fileno(f), "r+b");
+        fclose (ff);
         if (!f)
             throw FileAccessError (filename, "Concordance::Concordance");
         fseek (f, 24, SEEK_SET);
@@ -233,11 +293,10 @@ void Concordance::save (const char *filename, bool save_linegroup, bool partial,
         added = curr_used - old_size;
         fseek (f, seek, SEEK_SET);
     } else {
-        f = fopen (filename, "wb");
         if (!f)
             throw FileAccessError (filename, "Concordance::Concordance");
         fwrite (concsignature, sizeof (concsignature), 1, f);
-        fwrite ("\0", 1, 22, f); // rest of header just zeroes
+        write_header (f, added_align, finished(), full_size, curr_used);
     }
 
     // concordance
@@ -269,7 +328,7 @@ void Concordance::save (const char *filename, bool save_linegroup, bool partial,
     }
     int16_t al_num = aligned.size();
     fwrite (&al_num, sizeof(al_num), 1, f);
-    for (int i = 0; i < aligned.size(); i++) {
+    for (unsigned i = 0; i < aligned.size(); i++) {
         CorpData *cdata = aligned [i];
         const char *cname = cdata->corp->get_conffile();
         fwrite (cname, 1, strlen(cname), f);
@@ -315,19 +374,11 @@ void Concordance::save (const char *filename, bool save_linegroup, bool partial,
         ff (0);
     }
 
-    int64_t file_size = ftell (f);
-    fseek (f, 14, SEEK_SET);
-    char add = (added_align ? '\1' : '\0');
-    fwrite (&add, 1, 1, f);
-    char conctype;
-    if (finished())
-        conctype = conctype_ok;
-    else
-        conctype = conctype_creating;
-    fwrite (&conctype, sizeof (conctype), 1, f);
-    fwrite (&full_size, sizeof (full_size), 1, f);
-    fwrite (&file_size, sizeof (file_size), 1, f);
-    fwrite (&curr_used, sizeof (curr_used), 1, f);
+    if (append) {
+        fseek (f, 14, SEEK_SET);
+        write_header (f, added_align, finished(), full_size, curr_used);
+    }
+    fdatasync (fileno (f));
     fclose (f);
     if (partial)
         unlock();

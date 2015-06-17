@@ -1,4 +1,4 @@
-//  Copyright (c) 2010-2012  Pavel Rychly
+//  Copyright (c) 2010-2013  Pavel Rychly, Milos Jakubicek
 //  Multi Level Tokenization
 
 #ifndef LEVEL_HH
@@ -6,6 +6,8 @@
 
 #include <finlib/fstream.hh>
 #include <string>
+
+class TokenLevel;
 
 class MLTStream {
 public:
@@ -32,10 +34,14 @@ public:
     virtual void next() =0;
     virtual Position find_org(Position pos) =0;
     virtual Position find_new(Position pos) =0;
+    virtual ~MLTStream() {};
 };
 
-
-MLTStream *full_level(const std::string &levelfile);
-FastStream *tolevelfs (const std::string &levelfile, FastStream *src);
+TokenLevel *new_TokenLevel (const std::string &path);
+void delete_TokenLevel (TokenLevel *level);
+MLTStream *full_level (TokenLevel *level);
+FastStream *tolevelfs (TokenLevel *level, FastStream *src);
 
 #endif
+
+// vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

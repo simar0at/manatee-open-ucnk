@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2013  Pavel Rychly, Milos Jakubicek
 
 #include "concord.hh"
 #include "conccrit.hh"
@@ -74,13 +74,13 @@ void Concordance::sort (const char *crit, bool uniq)
 // ==================== Concordance::count_sort ====================
 class count_crit {
     PosAttr *pa;
+    RangeStream *concrs;
     Concordance::context *beg;
     Concordance::context *end;
-    RangeStream *concrs;
 public:
     count_crit (RangeStream *concrs, Corpus *corp, const string &attr,
                 const char *ctxbeg, const char *ctxend)
-        : concrs (concrs), pa (corp->get_attr(attr)),
+        : pa (corp->get_attr(attr)), concrs (concrs),
           beg (prepare_context (corp, ctxbeg, true)),
           end (prepare_context (corp, ctxend, false))
     {}

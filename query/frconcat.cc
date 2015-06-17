@@ -1,4 +1,4 @@
-// Copyright (c) 1999-2011 Pavel Rychly
+// Copyright (c) 1999-2011  Pavel Rychly, Milos Jakubicek
 
 #include <assert.h>
 #include "frsop.hh"
@@ -23,13 +23,6 @@ RQConcatLeftEndSorted::RQConcatLeftEndSorted (RangeStream *s1, RangeStream *s2)
     locate();
 }
 
-
-void RQConcatLeftEndSorted::skip_empty_regions()
-{
-    if (peek_beg() == peek_end())
-            next();
-}
-
 Position RQConcatLeftEndSorted::locate()
 {
     begs.clear();
@@ -41,13 +34,8 @@ Position RQConcatLeftEndSorted::locate()
     // locate connection (v1 == v2)
     while (true) {
         if ((v1 >= fin1 && v2 >= fin2) || (v1 >= fin1 && !opt1) ||
-            (v2 >= fin2 && !opt2)) {
-            begs.push_back (finval);
-            ends.push_back (finval);
-            labs1.push_back (Labels());
-            labs2.push_back (Labels());
-            return finval;
-        }
+            (v2 >= fin2 && !opt2))
+            goto finished;
         if (v1 == v2)
             break;
         if (v1 < v2) {
@@ -55,6 +43,8 @@ Position RQConcatLeftEndSorted::locate()
                 v2 = v1;
                 break;
             }
+            if (v2 >= fin1)
+                goto finished;
             src1->find_end (v2);
             v1 = src1->peek_end();
         } else {
@@ -62,6 +52,8 @@ Position RQConcatLeftEndSorted::locate()
                 v1 = v2;
                 break;
             }
+            if (v1 >= fin2)
+                goto finished;
             v2 = src2->find_beg (v1);
         }
     }
@@ -69,11 +61,10 @@ Position RQConcatLeftEndSorted::locate()
     // fill up begs
     if (opt1) {
         Labels l;
-        src1->add_labels (l);
         labs1.push_back (l);
         begs.push_back (v2);
     }
-    while (src1->peek_end() == v1) {
+    while (src1->peek_end() == v1 && v1 < fin1) {
         Labels l;
         src1->add_labels (l);
         labs1.push_back (l);
@@ -82,7 +73,7 @@ Position RQConcatLeftEndSorted::locate()
     }
 
     // fill up ends
-    while (src2->peek_beg() == v2) {
+    while (src2->peek_beg() == v2 && v2 < fin2) {
         Labels l;
         src2->add_labels (l);
         labs2.push_back (l);
@@ -91,13 +82,17 @@ Position RQConcatLeftEndSorted::locate()
     }
     if (opt2) {
         Labels l;
-        src2->add_labels (l);
         labs2.push_back (l);
         ends.push_back (v1);
     }
 
-    skip_empty_regions();
     return begs[0];
+finished:
+    begs.push_back (finval);
+    ends.push_back (finval);
+    labs1.push_back (Labels());
+    labs2.push_back (Labels());
+    return finval;
 }
 
 bool RQConcatLeftEndSorted::next()
@@ -107,7 +102,6 @@ bool RQConcatLeftEndSorted::next()
         if (++currbeg >= begs.size())
             return locate() < finval;
     }
-    skip_empty_regions();
     return true;
 }
 

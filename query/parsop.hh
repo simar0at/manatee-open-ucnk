@@ -1,5 +1,4 @@
-// $Id: parsop.hh,v 2.1 2004-03-17 00:43:37 pary Exp $
-//  Copyright (c) 2003-2004  Pavel Rychly
+//  Copyright (c) 2003-2004  Pavel Rychly, Milos Jakubicek
 
 #ifndef PARSOP_HH
 #define PARSOP_HH

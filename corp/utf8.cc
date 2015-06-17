@@ -1,4 +1,4 @@
-//  Copyright (c) 2011-2013  Pavel Rychly
+//  Copyright (c) 2011-2014  Pavel Rychly, Milos Jakubicek
 
 #include <stdint.h>
 #include <string.h>
@@ -20,19 +20,22 @@ unsigned int utf8len (const char *bytes)
 }
 
 /* returns n-th char in bytes */
-int32_t utf8char (const char *bytes, int n)
+int64_t utf8char (const char *bytes, int n)
 {
+    int64_t ret = 0;
+    if (n < 0)
+        return ret;
     const char *beg = bytes;
-    for (n++; *bytes && n >= 0; bytes++) {
+    for (n++; *bytes; bytes++) {
         if (is_utf8char_begin(*bytes)) {
-            if (n)
+            if (n--)
                 beg = bytes;
-            n--;
+            else
+                break;
         }
     }
-    int len = (*bytes) ? (bytes - beg - 1) : (bytes - beg);
-    int32_t ret = 0;
-    memcpy(&ret, beg, len);
+    if (n == -1 || (n == 0 && !*bytes))
+        memcpy(&ret, beg, bytes - beg);
     return ret;
 }
 
@@ -180,7 +183,30 @@ unsigned int uni_tolower (unsigned int ucharn) {
         return ucharn + delta;
 }
 
-const unsigned char * utf8_tolower (const unsigned char *src)
+unsigned int uni_toupper (unsigned int ucharn) {
+    uni_to_lower_t *b;
+    int i = ucharn / 256;
+    if (i >= utl_index_len)
+        b = uni_to_lower + utl_index[utl_index_len -1];
+    else
+        b = uni_to_lower + utl_index[i];
+    while (b < utl_end && b->tolower + b->blocklen <= ucharn)
+        b++;
+    if (b >= utl_end)
+        return ucharn;
+
+    if (ucharn < b->tolower || ucharn >= b->tolower + b->blocklen)
+        return ucharn;
+    int delta = b->tolower - b->first;
+    if (delta == 1) {
+        if ((ucharn - b->tolower) % 2 == 1)
+            return ucharn;
+        return ucharn -1;
+    } else
+        return ucharn - delta;
+}
+
+inline const unsigned char * utf8_case (const unsigned char *src, bool tolower)
 {
     static unsigned char *result = NULL;
     static size_t ressize = 0;
@@ -192,9 +218,39 @@ const unsigned char * utf8_tolower (const unsigned char *src)
             throw std::bad_alloc();
     }
     unsigned char *r = result;
-    while (*src)
-        uni2utf8 (uni_tolower(utf82uni (src)), r);
+    while (*src) {
+        if (tolower)
+            uni2utf8 (uni_tolower(utf82uni (src)), r);
+        else
+            uni2utf8 (uni_toupper(utf82uni (src)), r);
+    }
     *r = '\0';
+    return result;
+}
+
+const unsigned char * utf8_tolower (const unsigned char *src) {
+    return utf8_case (src, true);
+}
+
+const unsigned char * utf8_toupper (const unsigned char *src) {
+    return utf8_case (src, false);
+}
+
+/* returns bytes with first char capitalized */
+const unsigned char * utf8capital (const unsigned char *bytes)
+{
+    static unsigned char *result = NULL;
+    static size_t ressize = 0;
+    size_t len = strlen ((const char *) bytes);
+    if (ressize <= 2 * len) {
+        ressize = 2 * len + 1;
+        result = (unsigned char *) realloc (result, ressize);
+        if (!result)
+            throw std::bad_alloc();
+    }
+    unsigned char *r = result;
+    uni2utf8 (uni_toupper(utf82uni (bytes)), r);
+    strcpy ((char *) r, (const char *) bytes);
     return result;
 }
 

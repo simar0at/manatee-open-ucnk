@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2013  Pavel Rychly, Milos Jakubicek
 
 #ifndef CONCCRIT_HH
 #define CONCCRIT_HH

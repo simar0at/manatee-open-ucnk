@@ -1,8 +1,9 @@
-# definition file for a virtual corpus is text file
+# Definition file for a virtual corpus is text file
 # 
-# each section starts with corpus name
-# each line in a section describes one interval of tokens
-#    which are going to be included in the virtual corpus
+# Each section starts with an equal sign followed by corpus name.
+# Each line in a section describes one interval of tokens which are going to be
+# included in the virtual corpus, using a dollar sign ($) instead of
+# end position means using corpus final position.
 
 =desam
 100,1000
@@ -10,5 +11,4 @@
 200000,800000
 
 =susanne
-0,10000
-50000,80000
+0,$

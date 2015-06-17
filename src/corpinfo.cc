@@ -1,4 +1,3 @@
-// $Id: corpinfo.cc,v 2.4 2004-10-28 13:14:26 pary Exp $
 //  Copyright (c) 2001-2004  Pavel Rychly
 
 #include "corpus.hh"

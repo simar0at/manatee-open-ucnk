@@ -1,5 +1,6 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2015  Pavel Rychly, Milos Jakubicek
 
+#include "config.hh"
 #include "concord.hh"
 #include "conccrit.hh"
 #include "bgrstat.hh"
@@ -8,6 +9,15 @@
 #include <finlib/srtruns.hh>
 #include "frsop.hh"
 #include <algorithm>
+
+#if defined MANATEE_HAVE_EXT_HASH_MAP
+#include <ext/hash_map>
+#    if defined MANATEE_HAVE_GNU_CXX_NS
+         namespace std {using namespace __gnu_cxx;}
+#    endif
+#else
+#include <hash_map>
+#endif
 
 using namespace std;
 
@@ -25,7 +35,7 @@ void combine_multivalue_attrs(const string *tocomp, vector<Concordance::criteria
        data_t* data, int cr_idx, vector<string> *multival);
 
 void process_attr(const string *tocomp, vector<Concordance::criteria*> *cr,
-        data_t* data, int cr_idx, vector<string> *multival, const string *attr) {
+        data_t* data, size_t cr_idx, vector<string> *multival, const string *attr) {
 
     string attr_list;
     if (cr_idx != 0) {
@@ -75,7 +85,10 @@ void combine_multivalue_attrs(const string *tocomp, vector<Concordance::criteria
 
 void Corpus::freq_dist (RangeStream *r, ostream &out, const char *crit, NumOfPos limit)
 {
-    sync();
+    if (r->end()) {
+        delete r;
+        return;
+    }
     vector<Concordance::criteria*>cr;
     prepare_criteria (this, r, crit, cr);
     if (cr.empty()) {
@@ -100,7 +113,7 @@ void Corpus::freq_dist (RangeStream *r, ostream &out, const char *crit, NumOfPos
         delete *ci;
     // output results
     for (data_t::iterator mi=data.begin(); mi != data.end(); mi++)
-        if ((*mi).second > limit)
+        if ((*mi).second >= limit)
             out << (*mi).second << '\t' << (*mi).first << '\n';
     delete r;
 }
@@ -109,6 +122,10 @@ void Corpus::freq_dist (RangeStream *r, const char *crit, NumOfPos limit,
                 vector<string> &words, vector<NumOfPos> &freqs,
                 vector<NumOfPos> &norms)
 {
+    if (r->end()) {
+        delete r;
+        return;
+    }
     vector<Concordance::criteria*>cr;
     prepare_criteria (this, r, crit, cr);
     if (cr.empty()) {
@@ -129,20 +146,22 @@ void Corpus::freq_dist (RangeStream *r, const char *crit, NumOfPos limit,
         const string tocomp = "";
         combine_multivalue_attrs(&tocomp, &cr, &data, 0, &multival);
     } while (r->next());
-    PosAttr *firstattr = cr[0]->get_attr();
+    PosAttr* first_struct_attr = NULL;
+    if (cr[0]->get_attr() && strchr(cr[0]->get_attr()->name.c_str(), '.'))
+        first_struct_attr = cr[0]->get_attr();
     // free criteria
     for (ci = cr.begin(); ci != cr.end(); ci++)
         delete *ci;
     // output results
     for (data_t::iterator mi=data.begin(); mi != data.end(); mi++)
-        if ((*mi).second > limit) {
+        if ((*mi).second >= limit) {
             words.push_back ((*mi).first);
             freqs.push_back ((*mi).second);
             NumOfPos normval = 0;
-            if (firstattr) {
-                int id = firstattr->str2id ((*mi).first.c_str());
+            if (first_struct_attr) {
+                int id = first_struct_attr->str2id ((*mi).first.c_str());
                 if (id >= 0)
-                    normval = firstattr->norm (id);
+                    normval = first_struct_attr->norm (id);
             }
             norms.push_back (normval);
         }

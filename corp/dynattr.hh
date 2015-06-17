@@ -1,4 +1,4 @@
-//  Copyright (c) 2000-2011  Pavel Rychly
+//  Copyright (c) 2000-2011  Pavel Rychly, Milos Jakubicek
 
 #ifndef DYNATTR_HH
 #define DYNATTR_HH

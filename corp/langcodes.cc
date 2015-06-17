@@ -1,4 +1,4 @@
-/*  Copyright (c) 2011-2013  Milos Jakubicek
+/*  Copyright (c) 2011-2014  Milos Jakubicek
 
 Obtained from http://unicode.org/repos/cldr/trunk/common/supplemental/likelySubtags.xml
 
@@ -7,22 +7,28 @@ by the following:
 grep '<likelySubtag ' likelySubtags.xml | grep -v und |
 sed 's#.* to="\([^"_]\+\)_\([^"_]\+_\)\?\([^"_]\+\)"/> <!--{ \([^;]\+\).*#lc ["\4"] = "\1_\3";#'
 
-and modified manually for Chinese and Setswana:
+and modified manually:
 
 (*lc) ["Chinese"] = "zh_CN";
 (*lc) ["Chinese Simplified"] = "zh_CN";
 (*lc) ["Chinese Traditional"] = "zh_TW";
-(*lc) ["Setswana"] = "tn_BW";
-
+(*lc) ["Setswana"] = "tn_ZA";
+(*lc) ["Frisian"] = "fy_NL";
+(*lc) ["Maldivian"] = "dv_MV";
+(*lc) ["Norwegian"] = "no_NO";
+(*lc) ["Yiddish"] = "yi_US";
+(*lc) ["Kyrgyz"] = "ky_KG";
+(*lc) ["Esperanto"] = "C";
+(*lc) ["-- other (UTF-8) --"] = "C";
 */
 
 #include <string>
 #include <cstdio>
 #include <cstring>
 
-#if defined HAVE_EXT_HASH_MAP
+#if defined MANATEE_HAVE_EXT_HASH_MAP
 #include <ext/hash_map>
-#    if defined HAVE_GNU_CXX_NS
+#    if defined MANATEE_HAVE_GNU_CXX_NS
          namespace std {using namespace __gnu_cxx;}
 #    endif
 #else
@@ -85,6 +91,7 @@ ss_map* init_langcodes() {
     (*lc) ["Zarma"] = "dje_NE";
     (*lc) ["Duala"] = "dua_CM";
     (*lc) ["Divehi"] = "dv_MV";
+    (*lc) ["Maldivian"] = "dv_MV";
     (*lc) ["Jola-Fonyi"] = "dyo_SN";
     (*lc) ["Dzongkha"] = "dz_BT";
     (*lc) ["Embu"] = "ebu_KE";
@@ -104,6 +111,7 @@ ss_map* init_langcodes() {
     (*lc) ["Faroese"] = "fo_FO";
     (*lc) ["French"] = "fr_FR";
     (*lc) ["Friulian"] = "fur_IT";
+    (*lc) ["Frisian"] = "fy_NL";
     (*lc) ["Western Frisian"] = "fy_NL";
     (*lc) ["Irish"] = "ga_IE";
     (*lc) ["Ga"] = "gaa_GH";
@@ -172,6 +180,7 @@ ss_map* init_langcodes() {
     (*lc) ["Kumyk"] = "kum_RU";
     (*lc) ["Cornish"] = "kw_GB";
     (*lc) ["Kirghiz"] = "ky_KG";
+    (*lc) ["Kyrgyz"] = "ky_KG";
     (*lc) ["Latin"] = "la_VA";
     (*lc) ["Langi"] = "lag_TZ";
     (*lc) ["Lahnda"] = "lah_PK";
@@ -209,6 +218,7 @@ ss_map* init_langcodes() {
     (*lc) ["Erzya"] = "myv_RU";
     (*lc) ["Nauru"] = "na_NR";
     (*lc) ["Nama"] = "naq_NA";
+    (*lc) ["Norwegian"] = "no_NO";
     (*lc) ["Norwegian Bokmål"] = "nb_NO";
     (*lc) ["North Ndebele"] = "nd_ZW";
     (*lc) ["Low German"] = "nds_DE";
@@ -265,7 +275,7 @@ ss_map* init_langcodes() {
     (*lc) ["Serbian"] = "sr_RS";
     (*lc) ["Serbian"] = "sr_RS";
     (*lc) ["Serbian"] = "sr_ME";
-    (*lc) ["Setswana"] = "tn_BW";
+    (*lc) ["Setswana"] = "tn_ZA";
     (*lc) ["Swati"] = "ss_ZA";
     (*lc) ["Saho"] = "ssy_ER";
     (*lc) ["Southern Sotho"] = "st_ZA";
@@ -315,15 +325,23 @@ ss_map* init_langcodes() {
     (*lc) ["Soga"] = "xog_UG";
     (*lc) ["Yapese"] = "yap_FM";
     (*lc) ["Yangben"] = "yav_CM";
+    (*lc) ["Yiddish"] = "yi_US";
     (*lc) ["Yoruba"] = "yo_NG";
     (*lc) ["Zhuang"] = "za_CN";
     (*lc) ["Chinese"] = "zh_CN";
     (*lc) ["Chinese Simplified"] = "zh_CN";
     (*lc) ["Chinese Traditional"] = "zh_TW";
     (*lc) ["Zulu"] = "zu_ZA";
+    (*lc) ["Esperanto"] = "C";
+    (*lc) ["-- other (UTF-8) --"] = "C";
     return lc;
 }
 
 static ss_map *langcodes = init_langcodes();
+
+void languages (vector<string> &out) {
+    for (ss_map::iterator i = langcodes->begin(); i != langcodes->end(); i++)
+        out.push_back (i->first);
+}
 
 // vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

@@ -1,0 +1,119 @@
+#!/usr/bin/python
+# Copyright (c) 2014  Vojtech Kovar
+# -*- coding: utf-8 -*-
+
+# unsorted megadata file with pairs + 2 freq files ---> 2 pcdicts
+
+import sys, os, heapq, shutil
+from math import log
+from tempfile import gettempdir
+from itertools import islice, cycle
+from collections import namedtuple
+
+def usage():
+    print sys.argv[0], 'PAIRS FREQS_1 FREQS_2 OUT_PCDICT'
+
+
+# batch_sort based on Recipe 466302: Sorting big files
+# the Python 2.4 way by Nicolas Lehuen
+
+def merge(key=None, *iterables):
+    keyed_iterables = iterables
+    for element in heapq.merge(*keyed_iterables):
+        yield element
+
+def batch_sort(input, output, key=None, buffer_size=32000, tempdirs=None):
+    if tempdirs is None:
+        tempdirs = []
+    if not tempdirs:
+        tempdirs.append(gettempdir())
+
+    chunks = []
+    try:
+        with open(input,'rb',64*1024) as input_file:
+            input_iterator = iter(input_file)
+            for tempdir in cycle(tempdirs):
+                current_chunk = list(islice(input_iterator,buffer_size))
+                if not current_chunk:
+                    break
+                current_chunk.sort(key=key)
+                output_chunk = open(os.path.join(tempdir, '%06i'%len(chunks)),
+                                    'w+b', 64*1024)
+                chunks.append(output_chunk)
+                output_chunk.writelines(current_chunk)
+                output_chunk.flush()
+                output_chunk.seek(0)
+                sys.stderr.write('  %d chunks processed ...\n' % len(chunks))
+        sys.stderr.write('merging ...\n')
+        with open(output,'wb',64*1024) as output_file:
+            output_file.writelines(merge(key, *chunks))
+    finally:
+        for chunk in chunks:
+            try:
+                chunk.close()
+                os.remove(chunk.name)
+            except Exception:
+                pass
+
+
+def write_pcdict(sorted_pairs, freqsf1, freqsf2, out):
+    sys.stderr.write('processing sorted data and writing lexicon ...\n')
+    oldline = ''; oldx = ''; translations = []; fxy = 1
+    freqs1, freqs2 = {}, {}
+    outfile = open(out, 'w')
+    for line in open(freqsf1):
+        k, v = line.rstrip('\n\r').split('\t')
+        freqs1[k] = int(v)
+    for line in open(freqsf2):
+        k, v = line.rstrip('\n\r').split('\t')
+        freqs2[k] = int(v)
+    for i, line in enumerate(open(sorted_pairs)):
+        if i and i % 10000000 == 0:
+            sys.stderr.write('  %dM lines processed ...\n' % (i/1000000))
+        if line == oldline:
+            fxy += 1
+        else:
+            if fxy > 1: # new line => process the previous one
+                x, y = oldline.rstrip('\n\r').split('\t')
+                fx = float(freqs1[x])
+                fy = float(freqs2[y])
+                logdice = 14 + log(2 * fxy / (fx + fy), 2)
+                if x == oldx:
+                    translations.append((-logdice, -fxy, y))
+                else: # new term => flush the best translations
+                    if translations:
+                        outfile.write('~ %s\n' % oldx)
+                        for ld, freq, yy in sorted(translations)[:10]:
+                            outfile.write('%s\t%.2f\t%d\n' % (yy, -ld, -freq))
+                    oldx = x
+                    translations = [(logdice, fxy, y)]
+            oldline = line
+            fxy = 1
+
+
+#main
+if len(sys.argv) < 5:
+    usage()
+    exit(1)
+print 'Sorting the PAIRS file ...'
+pairs  = sys.argv[1]
+freqs1 = sys.argv[2]
+freqs2 = sys.argv[3]
+out    = sys.argv[4]
+tmpdir = os.path.dirname(pairs) + '/tmp_' + str(os.getpid())
+while os.path.exists(tmpdir):
+    tmpdir += 'x'
+os.makedirs(tmpdir)
+print 'Temporary data will be stored in %s' % tmpdir
+sorted_pairs = tmpdir+'/all_pairs.sorted'
+
+batch_sort(pairs, sorted_pairs, key=None, buffer_size=30000000,
+           tempdirs=[tmpdir])
+
+print 'Computing %s ...' % out
+write_pcdict(sorted_pairs, freqs1, freqs2, out)
+print 'Removing %s ...' % tmpdir
+shutil.rmtree(tmpdir)
+print 'Finished.'
+
+

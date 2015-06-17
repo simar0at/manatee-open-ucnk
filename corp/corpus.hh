@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2013  Pavel Rychly, Milos Jakubicek
 
 #ifndef CORPUS_HH
 #define CORPUS_HH
@@ -8,88 +8,103 @@
 #include "corpconf.hh"
 #include "virtcorp.hh"
 #include "excep.hh"
+#include "levels.hh"
 #include <vector>
+
+using namespace std;
 
 class Structure;
 
 class Corpus {
 public:
     typedef enum {Corpus_type, Struct_type} type_t;
-    typedef std::vector<std::pair<std::string,PosAttr*> > VSA;
-    typedef std::vector<std::pair<std::string,Structure*> > VSS;
-    typedef std::vector<std::pair<std::string,Corpus*> > VSC;
+    typedef vector<pair<string,PosAttr*> > VSA;
+    typedef vector<pair<string,Structure*> > VSS;
 protected:
+    struct AlignedCorpus {
+        string corp_name;
+        TokenLevel *level;
+        Corpus *corp;
+        AlignedCorpus (const string &c):
+            corp_name (c), level (NULL), corp (NULL) {}
+    };
     void init (CorpInfo *ci);
     Corpus (CorpInfo *ci, type_t t=Corpus_type);
     VSA attrs;
     VSS structs;
-    VSC aligned;
+    vector<AlignedCorpus> aligned;
     PosAttr *defaultattr;
     int maxctx;
     int hardcut;
     VirtualCorpus *virt;
-    virtual PosAttr *setup_attr (const std::string &name);
-    virtual Structure *setup_struct (const std::string &name);
-    PosAttr *get_struct_pos_attr (const std::string &strname,
-                                  const std::string &attname);
+    virtual PosAttr *setup_attr (const string &name);
+    virtual Structure *setup_struct (const string &name);
+    PosAttr *get_struct_pos_attr (const string &strname,
+                                  const string &attname);
     friend void *eval_query_thread (void *conc);
     friend class Concordance;
 public:
     type_t type;
     CorpInfo *conf;
 
-    Corpus (const std::string &corp_name);
+    Corpus (const string &corp_name);
     virtual ~Corpus ();
     virtual RangeStream *filter_query (RangeStream *s) {return s;}
-    PosAttr *get_attr (const std::string &name);
+    virtual IDPosIterator *filter_idpos (IDPosIterator *it) {return it;}
+    PosAttr *get_attr (const string &name);
     PosAttr *get_default_attr();
-    void set_default_attr (const std::string &attname);
-    Structure *get_struct (const std::string &name);
+    void set_default_attr (const string &attname);
+    Structure *get_struct (const string &name);
     virtual Position size() {
         return get_default_attr()->size();
     }
     virtual Position search_size() {return size();}
-    virtual std::string get_info();
-    const std::string &get_conf (const std::string &item) {
+    virtual string get_info();
+    const string &get_conf (const string &item) {
         return conf->find_opt (item);
     }
-    const std::string &get_confpath () {
+    const string &get_confpath () {
         return conf->conffile;
     }
     const char *get_conffile () {
         const char *path = conf->conffile.c_str();
         size_t slash = conf->conffile.rfind("/");
-        if (slash != std::string::npos)
+        if (slash != string::npos)
             path += slash + 1;
         return path;
     }
     int get_hardcut() {return hardcut;}
     int get_maxctx() {return maxctx;}
-    Corpus *get_aligned (const std::string &corp_name);
+    Corpus *get_aligned (const string &corp_name);
+    TokenLevel *get_aligned_level (const string &corp_name);
     virtual RangeStream *map_aligned (Corpus *al_corp, RangeStream *src);
-    const std::string get_sizes();
-    virtual NumOfPos compute_docf(FastStream *poss, RangeStream *struc);
-    void freq_dist (RangeStream *r, std::ostream &out, const char *crit,
+    const string get_sizes();
+    void compile_docf (const char *attr, const char *docstruc);
+    void compile_frq (const char *attr);
+    void compile_arf (const char *attr);
+    void compile_aldf (const char *attr);
+    void freq_dist (RangeStream *r, ostream &out, const char *crit,
                     NumOfPos limit);
     void freq_dist (RangeStream *r, const char *crit, NumOfPos limit,
-                    std::vector<std::string> &words, std::vector<NumOfPos> &freqs,
-                    std::vector<NumOfPos> &norms);
+                    vector<string> &words, vector<NumOfPos> &freqs,
+                    vector<NumOfPos> &norms);
 };
 
 
 class Structure: public Corpus {
 public:
     ranges *rng;
-    const std::string name;
-    std::string endtagstring;
-    Structure (CorpInfo *i, const std::string &path, const std::string &n);
-    Structure (CorpInfo *i, const std::string &n, VirtualCorpus *vc);
+    const string name;
+    string endtagstring;
+    Structure (CorpInfo *i, const string &path, const string &n);
+    Structure (CorpInfo *i, const string &n, VirtualCorpus *vc);
     virtual ~Structure() {delete rng;}
     virtual Position size () {return rng->size();}
 //      RangeStream *whole();
 //      RangeStream *part (FastStream *filter);
 };
 
+const char *manatee_version();
 
 #endif
 

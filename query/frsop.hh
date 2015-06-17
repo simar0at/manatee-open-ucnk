@@ -1,4 +1,4 @@
-// Copyright (c) 1999-2011  Pavel Rychly
+// Copyright (c) 1999-2015  Pavel Rychly, Milos Jakubicek
 
 #ifndef FINLIB_FRSOP_HH
 #define FINLIB_FRSOP_HH
@@ -41,17 +41,33 @@ public:
     REQUIRED_RangeStream_METHODS;
 };
 
-
+class OneRange: public RangeStream {
+    Position beg, end, finval;
+    bool finished;
+public:
+    OneRange (Position b = 0, Position e = 0, Position fin = 1)
+        : beg (b), end (e), finval (fin), finished (b >= fin) {}
+    virtual ~OneRange () {}
+    REQUIRED_RangeStream_METHODS;
+};
 
 class RQinNode: public RangeStream {
+protected:
     RangeStream *inside, *outside;
     Position infin, outfin;
     bool finished;
-    Position locate ();
+    virtual Position locate ();
 public:
-    RQinNode (RangeStream *in, RangeStream *out);
+    RQinNode (RangeStream *in, RangeStream *out, bool do_locate = true);
     virtual ~RQinNode () {delete inside; delete outside;}
     REQUIRED_RangeStream_METHODS;
+};
+
+class RQnotInNode: public RQinNode {
+    virtual Position locate ();
+public:
+    RQnotInNode (RangeStream *in, RangeStream *out);
+    virtual ~RQnotInNode () {}
 };
 
 
@@ -60,22 +76,32 @@ class RQoutsideNode: public RangeStream {
     Position finval;
     Position curr_beg, curr_end;
     void locate();
-public:
     RQoutsideNode (RangeStream *rs);
+public:
     virtual ~RQoutsideNode () {delete src;}
     REQUIRED_RangeStream_METHODS;
+    static RangeStream *create (RangeStream *src, Position maxpos);
 };
 
 
 class RQcontainNode: public RangeStream {
+protected:
     RangeStream *inside, *outside;
     Position infin, outfin;
     bool finished;
-    Position locate ();
+    virtual Position locate ();
 public:
-    RQcontainNode (RangeStream *out, RangeStream *in);
+    RQcontainNode (RangeStream *out, RangeStream *in, bool do_locate = true);
     virtual ~RQcontainNode () {delete inside; delete outside;}
     REQUIRED_RangeStream_METHODS;
+};
+
+class RQnotContainNode: public RQcontainNode {
+    virtual Position locate ();
+public:
+    RQnotContainNode (RangeStream *out, RangeStream *in);
+    virtual ~RQnotContainNode () {}
+    virtual Position find_end (Position pos);
 };
 
 
@@ -146,7 +172,6 @@ class RQConcatLeftEndSorted: public RangeStream {
     std::vector<Labels> labs1, labs2;
     unsigned int currbeg, currend;
     Position locate();
-    void skip_empty_regions();
 public:
     RQConcatLeftEndSorted (RangeStream *s1, RangeStream *s2);
     virtual ~RQConcatLeftEndSorted () {delete src1; delete src2;}

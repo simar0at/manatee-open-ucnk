@@ -1,5 +1,6 @@
-//  Copyright (c) 1999-2011  Pavel Rychly
+//  Copyright (c) 1999-2011  Pavel Rychly, Milos Jakubicek
 
+#include "config.hh"
 #include "concord.hh"
 #include "conccrit.hh"
 #include "concstat.hh"
@@ -10,6 +11,14 @@
 #include <algorithm>
 #include <math.h>
 
+#if defined MANATEE_HAVE_EXT_HASH_MAP
+#include <ext/hash_map>
+#    if defined MANATEE_HAVE_GNU_CXX_NS
+         namespace std {using namespace __gnu_cxx;}
+#    endif
+#else
+#include <hash_map>
+#endif
 
 using namespace std;
 
@@ -211,7 +220,7 @@ void Concordance::find_coll (ostream &out, const string &attr,
         }
         out << '\n';
     }
-    delete stat_funs;
+    delete[] stat_funs;
 }
 
 

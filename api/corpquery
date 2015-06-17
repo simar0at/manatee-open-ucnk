@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Copyright 2007-2014  Pavel Rychly, Milos Jakubicek
 
 import manatee
 
@@ -6,27 +7,48 @@ def print_region(region):
     for i in range(0, len(region), 2):
         print "%s" % region[i],
 
-def print_result(posBegin, posEnd, refattr, corp, attrs, structs, lrCtxSize,
-                 attrdelim, posdelim, kwicdelim):
+def print_result(kw_beg, kw_end, refattr, corp, attrs, structs, lrCtxSize,
+                 attrdelim, posdelim, kwicdelim, colls):
+    kwicbeg, kwicend = kwicdelim.split(",")
     if refattr:
-        ref = corp.get_attr (refattr)
-        print '#%i,%s' % (posBegin, ref.pos2str (posBegin)),
+        try:
+            ref = corp.get_attr (refattr)
+            print '#%i,%s' % (kw_beg, ref.pos2str (kw_beg)),
+        except manatee.AttrNotFound:
+            ref = corp.get_struct (refattr)
+            print '#%i,%s' % (kw_beg, ref.num_at_pos (kw_beg)),
     else:
-        print '#%i' % posBegin,
+        print '#%i' % kw_beg,
 
     corpRegion = manatee.CorpRegion(corp, attrs, structs)
-    leftCtx = corpRegion.region(posBegin - lrCtxSize[0], posBegin, posdelim,
-                                attrdelim)
-    kwic = corpRegion.region(posBegin, posEnd, posdelim, attrdelim)
-    rightCtx = corpRegion.region(posEnd, posEnd + lrCtxSize[1], posdelim,
-                                 attrdelim)
-
-    kwicbeg, kwicend = kwicdelim.split(",")
-    print_region(leftCtx)
-    print kwicbeg,
-    print_region(kwic)
-    print kwicend,
-    print_region(rightCtx)
+    collposs = {}
+    c = 0
+    while c < len(colls):
+        collposs [colls[c+1]] = colls[c]
+        c += 2
+    reg_beg = kw_beg - lrCtxSize[0]
+    collposs [0] = kwicbeg
+    rel_end = kw_end - kw_beg
+    if rel_end == 0: # structure
+        collposs [0] = kwicbeg + kwicend
+    else:
+        collposs [rel_end] = kwicend
+    # XXX collocations should be handled in CorpRegion so as not to interfere
+    # with structures
+    for c in sorted(collposs.keys()):
+        reg = corpRegion.region(reg_beg, kw_beg + c, posdelim, attrdelim)
+        print_region (reg)
+        if type(collposs[c]) == type(""):
+            print collposs[c],
+            reg_beg = kw_beg + c
+        else:
+            print "%s%d:" % (kwicbeg, collposs[c]),
+            reg = corpRegion.region(kw_beg + c, kw_beg + c + 1, posdelim, attrdelim)
+            print_region (reg)
+            print kwicend,
+            reg_beg = kw_beg + c + 1
+    last = corpRegion.region(reg_beg, kw_end+lrCtxSize[1], posdelim, attrdelim)
+    print_region(last)
     print
 
 def corp_query (corpname, query, refattr, ctxSize, hardcut, attrs, structs,
@@ -45,13 +67,17 @@ def corp_query (corpname, query, refattr, ctxSize, hardcut, attrs, structs,
     corp = manatee.Corpus (corpname)
     corp.set_default_attr(defattr)
     result = corp.eval_query (query)
+    colls = manatee.IntVector()
+    result.collocs (colls)
+    numofcolls = len (colls) / 2
     if gdex_conf:
         try:
             import gdex
         except:
             import gdex_old as gdex
         result.thisown = False
-        conc = manatee.Concordance (corp, result)
+        conc = manatee.Concordance (corp, result, numofcolls)
+        conc.sync()
         if gdex_conf == "-":
             gdex_conf = None
         try:
@@ -63,14 +89,30 @@ def corp_query (corpname, query, refattr, ctxSize, hardcut, attrs, structs,
             hardcut = 100
         G_sort = G.best_k (hardcut, hardcut) # compute and return sorted list
         for _, concnum in G_sort:
+            colls = []
+            for i in xrange(1, conc.numofcolls() + 1):
+                collpos = conc.coll_beg_at (i, concnum)
+                if collpos != -1:
+                    colls.append (i)
+                    colls.append (collpos - conc.beg_at (concnum))
             print_result(conc.beg_at(concnum), conc.end_at(concnum), refattr,
                          corp, attrs, structs, lrCtxSize, attrdelim, posdelim,
-                         kwicdelim)
+                         kwicdelim, colls)
     else:
         while (hardcut > 0 or hardcut == -1) and not result.end():
+            colls = manatee.IntVector()
+            result.collocs (colls)
+            colls = list(colls)
+            i = 0
+            while i < len(colls):
+                if colls[i] >= 100 or colls[i] <= -100:
+                    colls.pop(i)
+                    colls.pop(i)
+                else:
+                    i += 2
             print_result(result.peek_beg(), result.peek_end(), refattr, corp,
                          attrs, structs, lrCtxSize, attrdelim, posdelim,
-                         kwicdelim)
+                         kwicdelim, colls)
             result.next()
             if hardcut != -1:
                 hardcut -= 1
@@ -79,11 +121,12 @@ def corp_query (corpname, query, refattr, ctxSize, hardcut, attrs, structs,
 if __name__ == '__main__':
     from sys import argv, path
     from distutils.sysconfig import get_python_lib;
-    args = {"-r" : None, "-c" : 15, "-h" : -1, "-a" : "word,lemma,tag",
-            "-s" : "s,p,doc", "-d": "word", "-g" : None, 
-            "-m" : get_python_lib() + "/bonito2/", "-e": "/", "-l": " ",
-            "-k" : "<,>"}
+    args = {"-r" : None, "-c" : 15, "-h" : -1, "-a": "DEFAULTATTR, lemma, tag",
+            "-s" : "s,p,doc", "-k" : "<,>", "-g" : None, "-d": "DEFAULTATTR",
+            "-m" : get_python_lib() + "/bonito/", "-e": "/", "-l": " "}
     if argv[2:]:
+        args["-d"] = manatee.Corpus (argv[1]).get_conf ("DEFAULTATTR")
+        args["-a"] = args["-d"] + ",lemma,tag"
         import getopt
         opts, _ = getopt.getopt(argv[3:], "r:c:h:a:s:d:g:m:e:l:k:")
         args.update(dict(opts))

@@ -1,11 +1,54 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2015  Pavel Rychly, Milos Jakubicek
 
+#include "config.hh"
 #include "concord.hh"
 #include "cqpeval.hh"
 #include "conccrit.hh"
 #include "frsop.hh"
 #include <cstdlib>
 #include <cstring>
+
+#ifdef MANATEE_HAVE_PTHREAD
+    #include <pthread.h>
+    #define mutex_t pthread_mutex_t
+    #define thread_t pthread_t
+    #define mutex_init(...) pthread_mutex_init (__VA_ARGS__)
+    #define mutex_destroy(...) pthread_mutex_destroy (__VA_ARGS__)
+    #define mutex_lock(...) pthread_mutex_lock (__VA_ARGS__)
+    #define mutex_trylock(...) pthread_mutex_trylock (__VA_ARGS__)
+    #define mutex_unlock(...) pthread_mutex_unlock (__VA_ARGS__)
+    #define thread_create(...) pthread_create (__VA_ARGS__)
+    #define thread_join(...) pthread_join (__VA_ARGS__)
+    #define thread_cleanup_push(...) pthread_cleanup_push (__VA_ARGS__)
+    #define thread_cleanup_pop(...) pthread_cleanup_pop (__VA_ARGS__)
+    #define thread_setcancelstate(...) pthread_setcancelstate (__VA_ARGS__)
+    #define thread_testcancel(...) pthread_testcancel(__VA_ARGS__)
+    #define thread_cancel(...) pthread_cancel(__VA_ARGS__)
+#else
+    #define mutex_t int
+    #define thread_t int
+    #define mutex_init(...)
+    #define mutex_destroy(...)
+    #define mutex_lock(...)
+    #define mutex_trylock(...)
+    #define mutex_unlock(...)
+    #define thread_create(id, attr, func, arg) func(arg)
+    #define thread_join(...)
+    #define thread_cleanup_push(...)
+    #define thread_cleanup_pop(...)
+    #define thread_setcancelstate(...)
+    #define thread_testcancel(...)
+    #define thread_cancel(...)
+#endif
+
+#if defined MANATEE_HAVE_EXT_HASH_MAP
+#include <ext/hash_map>
+#    if defined MANATEE_HAVE_GNU_CXX_NS
+         namespace std {using namespace __gnu_cxx;}
+#    endif
+#else
+#include <hash_map>
+#endif
 
 using namespace std;
 
@@ -25,9 +68,9 @@ else { \
 void free_rngmutex(void *concordance)
 {
     Concordance *conc = static_cast <Concordance*> (concordance);
-    mutex_trylock(conc->rng_mutex);
+    mutex_trylock((mutex_t *) conc->rng_mutex);
     conc->unlock();
-    mutex_destroy(conc->rng_mutex);
+    mutex_destroy((mutex_t *) conc->rng_mutex);
     conc->rng_mutex = NULL;
     delete conc->query;
     conc->query = NULL;
@@ -46,7 +89,7 @@ void generate_random (vector <ConcIndex> &result, ConcIndex add,
     for (ConcIndex i = 0; i < sample; i++) {
         ConcIndex randci = max * (rand() / float(RAND_MAX));
         bool inserted = false;
-        int oldsize = rand_map.size();
+        unsigned oldsize = rand_map.size();
         rand_map[randci] = 0;
         if (rand_map.size() > oldsize)
             inserted = true;
@@ -115,7 +158,7 @@ void *eval_query_thread (void *concordance) {
              labi++) {
             int al_num = labi->first / 100;
             Concordance::CorpData *cdata = NULL;
-            for (int c = 0; c < conc->aligned.size(); c++) {
+            for (unsigned c = 0; c < conc->aligned.size(); c++) {
                 if (conc->aligned [c]->label == al_num) {
                     cdata = conc->aligned [c];
                     break;
@@ -123,14 +166,14 @@ void *eval_query_thread (void *concordance) {
             }
             if (!cdata) {
                 cdata = new Concordance::CorpData();
-                cdata->corp = conc->corp->aligned [al_num - 1].second;
+                cdata->corp = conc->corp->aligned [al_num - 1].corp;
                 cdata->label = al_num;
                 cdata->added_align = false;
                 conc->aligned.push_back (cdata);
                 REALLOC (ConcItem, cdata->rng, conc->allocated);
                 memset(cdata->rng, 0, conc->allocated * sizeof(ConcItem));
             }
-            if (cdata->colls.size() < labi->first % 100) {
+            if (int(cdata->colls.size()) < labi->first % 100) {
                 cdata->colls.push_back (NULL);
                 cdata->coll_count.push_back (0);
             }
@@ -143,17 +186,17 @@ void *eval_query_thread (void *concordance) {
             for (int i = 0; i < lastcoll; i++) {
                 REALLOC (collocitem, conc->colls[i], newsize);
             }
-            for (int c = 0; c < conc->aligned.size(); c++) {
+            for (unsigned c = 0; c < conc->aligned.size(); c++) {
                 Concordance::CorpData *cdata = conc->aligned [c];
                 REALLOC (ConcItem, cdata->rng, newsize);
-                for (int i = 0; i < cdata->colls.size(); i++) {
+                for (unsigned i = 0; i < cdata->colls.size(); i++) {
                     REALLOC (collocitem, cdata->colls[i], newsize);
                 }
             }
             conc->unlock();
         }
         conc->rng[conc->used].beg = p;
-        conc->rng[conc->used].end = src->peek_end();
+        conc->rng[conc->used].end = min (p + conc->maxkwic, src->peek_end());
         if (lastcoll > 0) {
             for (int i = 0; i < lastcoll && i < 100; i++) {
                 collocitem &ci = conc->colls[i][conc->used];
@@ -167,7 +210,7 @@ void *eval_query_thread (void *concordance) {
                 }
             }
         }
-        for (int c = 0; c < conc->aligned.size(); c++) {
+        for (unsigned c = 0; c < conc->aligned.size(); c++) {
             Concordance::CorpData *cdata = conc->aligned [c];
             int lab_num = 100 * cdata->label;
             ConcItem &ci = cdata->rng [conc->used];
@@ -182,7 +225,7 @@ void *eval_query_thread (void *concordance) {
                 else
                     ci.end = lab_end->second;
             }
-            for (int i = 0; i < cdata->colls.size(); i++) {
+            for (unsigned i = 0; i < cdata->colls.size(); i++) {
                 collocitem &ci = cdata->colls[i][conc->used];
                 int coll_lab_num = lab_num + i;
                 Labels::iterator lab_beg = lab.find(coll_lab_num);
@@ -218,15 +261,16 @@ void *eval_query_thread (void *concordance) {
     return NULL;
 }
 
-Concordance::Concordance (Corpus *corp, RangeStream *query, int inccolln,
+Concordance::Concordance (Corpus *corp, RangeStream *q, int inccolln,
                           ConcIndex sample_size, NumOfPos full_size)
     : rng (NULL), allocated (0), used (0), 
-      view (NULL), linegroup (NULL), query (query), corp (corp), 
-      corp_size (corp->size()), is_finished (false), sample_size (sample_size),
-      full_size (full_size), label (0), added_align (false)
+      view (NULL), linegroup (NULL), query (q), is_finished (false),
+      sample_size (sample_size), full_size (full_size), label (0),
+      added_align (false), corp (corp), corp_size (corp->size())
 {
     if (!query)
         return;
+    maxkwic = atoll (corp->get_conf("MAXKWIC").c_str());
     if (!sample_size)
         sample_size = corp->get_hardcut();
     for (int i=0; i < inccolln; i++) {
@@ -235,15 +279,15 @@ Concordance::Concordance (Corpus *corp, RangeStream *query, int inccolln,
     }
     thread_id = new thread_t;
     rng_mutex = new mutex_t;
-    mutex_init(rng_mutex, NULL);
-    thread_create(thread_id, NULL, eval_query_thread, this);
+    mutex_init((mutex_t *) rng_mutex, NULL);
+    thread_create((thread_t *) thread_id, NULL, eval_query_thread, this);
 }
 
 Concordance::Concordance (Concordance &x)
     : view (NULL), linegroup (NULL), rng_mutex (NULL), thread_id (NULL),
-      query (NULL), corp (x.corp), corp_size (x.corp_size),
-      is_finished (x.finished()), sample_size (x.sample_size),
-      full_size (x.full_size), label (x.label), added_align (x.added_align)
+      query (NULL), is_finished (x.finished()), sample_size (x.sample_size),
+      full_size (x.full_size), label (x.label), added_align (x.added_align),
+      maxkwic (x.maxkwic), corp (x.corp), corp_size (x.corp_size)
 {
     x.sync();
     nestval = x.nestval;
@@ -271,16 +315,26 @@ Concordance::Concordance (Concordance &x)
     }
 }
 
+void Concordance::lock() {
+    if (rng_mutex)
+        mutex_lock((mutex_t *) rng_mutex);
+}
+
+void Concordance::unlock() {
+    if (rng_mutex)
+        mutex_unlock((mutex_t *) rng_mutex);
+}
+
 Concordance::~Concordance ()
 {
     if (thread_id) {
-        thread_cancel (*thread_id);
-        thread_join (*thread_id, NULL);
-        delete thread_id;
+        thread_cancel (* (thread_t *) thread_id);
+        thread_join (* (thread_t *) thread_id, NULL);
+        delete (thread_t*) thread_id;
     }
     if (rng_mutex) {
-        mutex_destroy(rng_mutex);
-        delete rng_mutex;
+        mutex_destroy ((mutex_t *) rng_mutex);
+        delete (mutex_t *) rng_mutex;
     }
     if (view)
         delete view;
@@ -294,8 +348,8 @@ Concordance::~Concordance ()
 void Concordance::sync()
 {
     if (thread_id) {
-        thread_join (*thread_id, NULL);
-        delete thread_id;
+        thread_join (* (thread_t *) thread_id, NULL);
+        delete (thread_t *) thread_id;
         thread_id = NULL;
     }
 }
@@ -444,7 +498,7 @@ void Concordance::set_collocation (int collnum, const string &cquery,
 
 void Concordance::get_aligned (std::vector<std::string> &corpnames)
 {
-    for (int i = 0; i < aligned.size(); i++)
+    for (unsigned i = 0; i < aligned.size(); i++)
         if (!aligned [i]->added_align)
             corpnames.push_back (aligned [i]->corp->get_conffile());
     if (!added_align)

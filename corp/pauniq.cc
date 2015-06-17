@@ -1,6 +1,8 @@
-//  Copyright (c) 1999-2012  Pavel Rychly
+//  Copyright (c) 1999-2015  Pavel Rychly, Milos Jakubicek
 
 #include "posattr.hh"
+#include "dynattr.hh"
+#include "regexopt.hh"
 #include <finlib/fsop.hh>
 #include <finlib/lexicon.hh>
 #include <finlib/regexplex.hh>
@@ -25,12 +27,24 @@ public:
         virtual ~TextIter() {}
     };
     map_lexicon lex;
+    MapBinFile<int64_t> *normf;
+    PosAttr *regex;
     
     UniqPosAttr (const std::string &path, const std::string &n, const std::string &locale, 
                  const std::string &encoding, int text_size)
-        :PosAttr (path, n, locale, encoding), lex (path)
-    {}
-    virtual ~UniqPosAttr () {}
+        :PosAttr (path, n, locale, encoding), lex (path), normf (NULL),
+         regex (NULL)
+    {
+        try {
+            normf = new  MapBinFile<int64_t> (path + ".norm");
+        } catch (FileAccessError) {}
+        try {
+            DynFun *fun = createDynFun ("", "internal", "lowercase"); // lowercase = dummy here
+            regex = createDynAttr ("index", path + ".regex", n + ".regex", fun,
+                                   this, locale, false);
+        } catch (FileAccessError) {}
+    }
+    virtual ~UniqPosAttr () {delete normf; delete regex;}
 
     virtual int id_range () {return lex.size();}
     virtual const char* id2str (int id) {return lex.id2str (id);}
@@ -39,6 +53,9 @@ public:
     virtual const char* pos2str (Position pos) {return lex.id2str (pos);}
     virtual IDIterator *posat (Position pos)
         {return new IDIter (pos, lex.size());}
+    virtual IDPosIterator *idposat (Position pos)
+        {return new IDPosIterator (new IDIter (pos, lex.size()),
+                                   new SequenceStream (0, size()-1, size()));}
     virtual TextIterator *textat (Position pos) {return new TextIter (pos, lex);}
     virtual FastStream *id2poss (int id) 
         {return new SequenceStream (id, id, lex.size());}
@@ -47,16 +64,26 @@ public:
             (*this, lex, pat, cmp, ignorecase);
     }
     virtual FastStream *regexp2poss (const char *pat, bool ignorecase) {
+        FastStream *fs = NULL;
+        if (regex)
+            fs = optimize_regex (regex, pat, encoding);
         return new Gen2Fast<int>(
-            ::regexp2ids<map_lexicon>(lex, pat, locale, encoding, ignorecase));
+            ::regexp2ids<map_lexicon>(lex, pat, locale, encoding, ignorecase,
+                                      NULL, fs));
     }
     virtual Generator<int> *regexp2ids (const char *pat, bool ignorecase,
                                         const char *filter_pat) {
+        FastStream *fs = NULL;
+        if (regex)
+            fs = optimize_regex (regex, pat, encoding);
         return ::regexp2ids<map_lexicon> (lex, pat, locale, encoding,
-                                          ignorecase, filter_pat);
+                                          ignorecase, filter_pat, fs);
     }
     virtual NumOfPos freq (int id) {return 1;}
-    virtual NumOfPos norm (int id) {return 1;}
+    virtual NumOfPos docf (int id) {return 1;}
+    virtual float arf (int id) {return 1;}
+    virtual float aldf (int id) {return 1;}
+    virtual NumOfPos norm (int id) {return normf ? (*normf)[id] : 1;}
     virtual NumOfPos size () {return lex.size();}
 };
 

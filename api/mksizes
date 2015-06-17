@@ -1,0 +1,125 @@
+#!/bin/bash -e
+# Copyright 2013-2015  Milos Jakubicek
+
+if [ $# = 1 ]; then
+    NO_ALIGNSIZES=0
+elif [ $# = 2 ]; then
+    if [ "$2" == "--no-alignsizes" ]; then
+        NO_ALIGNSIZES=1
+    else
+        echo "Usage: $0 CORPUS [--no-alignsizes]"
+        exit 1;
+    fi
+else
+	echo "Usage: $0 CORPUS [--no-alignsizes]"
+	exit 1;
+fi
+
+CORPUS=$1
+PATH_="`corpinfo -p "$CORPUS"`"
+DOCSTRUCTURE="`corpinfo -g DOCSTRUCTURE "$CORPUS"`"
+NONWORDRE="`corpinfo -g NONWORDRE "$CORPUS"`"
+WORDCOUNTATTR="`corpinfo -g $DOCSTRUCTURE.wordcount.TYPE "$CORPUS" 2>/dev/null || :`"
+VIRTUAL="`corpinfo -g VIRTUAL "$CORPUS" 2>/dev/null`"
+COMPILED_SIZES_FILE="$PATH_/sizes"
+WORDCOUNT=0
+
+if [ "$VIRTUAL" ]; then
+	if [ $WORDCOUNTATTR ]; then
+		mknorms "$CORPUS" $DOCSTRUCTURE wordcount
+		WORDCOUNT=`lsclex -f "$CORPUS" $DOCSTRUCTURE.wordcount | awk '{s+=$2*$3};END{print s}' || echo 0`
+	elif [ $DOCSTRUCTURE ]; then
+		echo "warning: you should virtualize $DOCSTRUCTURE.wordcount and rerun this script"
+	fi
+	RECOMPILE=0
+	while read LINE; do
+		if echo $LINE | egrep -q '^#|^[[:space:]]*$'; then
+			continue;
+		elif echo $LINE | grep -q '^='; then
+			LASTCORP=${LINE#=}
+			SEGMENTS="$LASTCORP $SEGMENTS"
+		else
+			FROM=`echo $LINE | cut -f1 -d',' | tr -d '[[:space:]]'`
+			TO=`echo $LINE | cut -f2 -d',' | tr -d '[[:space:]]'`
+			if [[ $FROM -ne 0 || ( $TO != '$' && $TO -ne `corpinfo -s $LASTCORP` ) ]]; then
+				echo "One of the virtual corpus segments ($LASTCORP) is not full corpus => must recompile sizes from scratch"
+				RECOMPILE=1;
+				break;
+			fi
+		fi
+	done < $VIRTUAL
+	if [ $RECOMPILE -ne 1 ]; then
+		echo "Computing sizes from segments of the virtual corpus"
+		for SEG in $SEGMENTS; do
+			SEGPATH=`corpinfo -g PATH $SEG`
+			if [ ! -f $SEGPATH/sizes ]; then
+				echo "Compiling sizes for corpus segment: $SEG"
+				mksizes $SEG
+			fi
+			SIZEFILES="$SEGPATH/sizes $SIZEFILES"
+		done
+		paste $SIZEFILES | awk '{sum = 0; for (i = 2; i <= NF; i += 2) {sum += $i;} print $1, sum }' > $COMPILED_SIZES_FILE
+		echo "Sizes compiled"
+		exit 0;
+	fi
+fi
+
+# not VIRTUAL or VIRTUAL with at least one subcorpus
+if [ $WORDCOUNT -ne 0 ]; then
+	: # we have wordcount from VIRTUAL corpus
+elif [ `corpinfo -g $DOCSTRUCTURE.PATH "$CORPUS" 2>/dev/null` ]; then
+	TMPDIR=`mktemp -d /tmp/addwcattr.XXXXXXXXXX`
+	ATTR=`corpinfo -g word.TYPE $CORPUS >&/dev/null && echo word || corpinfo -g DEFAULTATTR $CORPUS`
+	addwcattr "$CORPUS" "$DOCSTRUCTURE" "$NONWORDRE" "$ATTR" |
+	encodevert -p "$TMPDIR" -a x -s "$DOCSTRUCTURE" -x;
+	tr '\0' '\n' < $TMPDIR/$DOCSTRUCTURE.wordcount.lex > $TMPDIR/tmp_lex
+	od -td4 -w4 -Anone -v $TMPDIR/$DOCSTRUCTURE.wordcount.rev.cnt > $TMPDIR/tmp_revcnt
+	mv $TMPDIR/$DOCSTRUCTURE.wordcount.* "$PATH_"
+	TMPCORP=$CORPUS
+	if [ -z "$WORDCOUNTATTR" ]; then
+		echo "warning: $DOCSTRUCTURE does not have attribute 'wordcount'; add the following line to the '$DOCSTRUCTURE' structure in your corpus configuration file."
+		echo 'ATTRIBUTE "wordcount"'
+		TMPCORP=`mktemp /tmp/mknormscorpus.XXXXXXXXX`
+		echo "PATH \"$PATH_\"" > $TMPCORP
+		corpinfo -d $CORPUS | awk "/^STRUCTURE \"$DOCSTRUCTURE\"/ {p=1;} /^}$/ {if (p) exit;} {if (p) print;}" >> $TMPCORP
+		echo "ATTRIBUTE \"wordcount\"" >> $TMPCORP
+		echo "}" >> $TMPCORP
+	fi
+	WORDCOUNT=`paste $TMPDIR/tmp_lex $TMPDIR/tmp_revcnt |awk '{s+=$1*$2};END{print s}'`
+	mknorms "$TMPCORP" $DOCSTRUCTURE wordcount
+	echo "Removing $TMPDIR..."
+	rm -rf $TMPDIR
+	[ -z "$WORDCOUNTATTR" ] && { echo "Removing $TMPCORP..."; rm $TMPCORP; }
+else
+	echo "No document structure ($DOCSTRUCTURE) found"
+	WORDCOUNT=`lsclex -f "$CORPUS" word | cut -f2,3 | grep -v "^$NONWORDRE	" | awk -F"\t" '{SUM+=$2} END {print SUM}'`
+fi
+TOKENCOUNT=`corpinfo -s "$CORPUS"`
+echo -e "tokencount $TOKENCOUNT\nwordcount $WORDCOUNT" > $COMPILED_SIZES_FILE
+DOCCOUNT=`python -c "from manatee import Corpus; c=Corpus('$CORPUS'); print c.get_struct('$DOCSTRUCTURE').size()" 2>/dev/null || echo 0`
+[ -z $DOCCOUNT ] && DOCCOUNT=0
+PARCOUNT=`python -c "from manatee import Corpus; c=Corpus('$CORPUS'); print c.get_struct('p').size()" 2>/dev/null || echo 0`
+[ -z $PARCOUNT ] && PARCOUNT=0
+SENTCOUNT=`python -c "from manatee import Corpus; c=Corpus('$CORPUS'); print c.get_struct('s').size()" 2>/dev/null || echo 0`
+[ -z $SENTCOUNT ] && SENTCOUNT=0
+echo -e "doccount $DOCCOUNT\nparcount $PARCOUNT\nsentcount $SENTCOUNT" >> $COMPILED_SIZES_FILE
+SMALLESTNORM=`ls -rS $PATH_/$DOCSTRUCTURE.*.norm |head -n 1`
+if [ $SMALLESTNORM ]; then
+	NORMSUM=`od -td8 -w8 -Anone $SMALLESTNORM | awk '{s+=$1}; END{print s}'`
+        echo -e "normsum $NORMSUM" >> $COMPILED_SIZES_FILE
+fi
+ALIGNED="`corpinfo -g ALIGNED "$CORPUS"`"
+if [ $NO_ALIGNSIZES = 1 ]; then
+    echo "Alignment size computation disabled; skipping..."
+elif [ -z "$ALIGNED" ]; then
+    echo "No parallel corpora specified in ALIGNED; skipping alignment size computations..."
+else
+    ALIGNS=(`echo $ALIGNED | sed 's/,/ /g'`)
+    for I in `seq 0 ${#ALIGNS[*]} | head -n -1`; do
+        echo "Computing alignment size for corpus ${ALIGNS[$I]}..."
+        lsalsize $CORPUS ${ALIGNS[$I]} >> $COMPILED_SIZES_FILE
+    done
+fi
+echo "Sizes compiled"
+
+# vim: ts=4 sw=4 sta et sts=4 si tw=80:

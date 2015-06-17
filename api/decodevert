@@ -1,5 +1,5 @@
 #! /usr/bin/env python
-#  Copyright (c) 2008  Pavel Rychly
+#  Copyright (c) 2014  Pavel Rychly
 
 """Decode a corpus -- creates a vertical file from encoded data
 """
@@ -31,11 +31,14 @@ class StructLines:
         self.name = structname
         self.struct = corp.get_struct(structname)
         self.attrs = []
-        for sa in corp.get_conf('STRUCTATTRLIST').split(','):
-            s,a = sa.split('.')
-            if s != structname:
-                continue
-            self.attrs.append((a,self.struct.get_attr(a)))
+        sa_list = corp.get_conf('STRUCTATTRLIST')
+        if len(sa_list) > 0:
+            sa_list = sa_list.split(',')
+            for sa in sa_list:
+                s,a = sa.split('.')
+                if s != structname:
+                    continue
+                self.attrs.append((a,self.struct.get_attr(a)))
         self.currnum = self.struct.num_next_pos(starttoken)
         if self.currnum < 0:
             self.currnum = 0
@@ -95,3 +98,6 @@ def decode_corpus (corp, attrs=None, structs=None, fromtok=None, totok=None):
 if __name__ == "__main__":
     if sys.argv[1:]:
         decode_corpus (manatee.Corpus(sys.argv[1]))
+    else:
+        print "Usage: %s CORPUS" % sys.argv[0]
+        print "Decodes a corpus -- creates a vertical file from encoded data"

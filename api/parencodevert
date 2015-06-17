@@ -1,0 +1,127 @@
+#!/bin/bash -e
+# Copyright 2013  Milos Jakubicek
+set -o pipefail
+
+USAGE="Usage: $0 [ OPTIONS ] CORPUS [ FILENAME ]
+Compiles CORPUS using multiple jobs in parallel.
+
+Options:
+-j <N>       Use N jobs in parallel (defaults to the number of CPU cores)
+-t <TMPDIR>  Use TMPDIR as temporary directory for storing vertical files
+             (defaults to /tmp)
+-h           Show this help"
+
+JOBS=`nproc`
+TMP_DIR=/tmp
+
+OPTS=`getopt -n $THIS -o hj:t: "$@"`
+
+if [ $? != 0 ]; then
+    echo "$USAGE"
+    exit 1
+fi
+
+eval set -- "$OPTS"
+
+while true; do
+    case $1 in
+        -j) JOBS=$2; shift 2;;
+        -t) TMP_DIR=$2; shift 2;;
+        -h) echo "$USAGE"; exit 0;;
+        --) shift; break;;
+        *) echo "Internal error!"; exit 1;;
+    esac
+done
+
+if [ $# = 0 -o $# -gt 2 ]; then
+    echo "$USAGE"
+    [ $# = 0 ] && exit 0 || exit 1
+fi
+
+if [ -z `which parallel 2>/dev/null || :` ]; then
+    echo "No GNU Parallel found installed, please install and retry."
+    exit 1;
+fi
+
+CORPUS=$1
+INPUT_FILE=$2
+TMP_PREF=`mktemp --tmpdir="$TMP_DIR" $CORPUS.par.XXXXX`
+if [ "$2" ]; then
+    if [ "$2" == "-" ]; then
+        VERTICAL="$TMP_PREF".vert
+        cat - > $VERTICAL
+    else
+        VERTICAL="$2"
+    fi
+else
+    VERTICAL=`corpinfo -g VERTICAL $CORPUS`
+fi
+DOCSTRUCTURE=`corpinfo -g DOCSTRUCTURE $CORPUS`
+PATH_=`corpinfo -p $CORPUS`
+CONFFILE=`python -c "import manatee; c=manatee.Corpus(\"$CORPUS\"); print c.get_confpath();"`
+SCALE=`python -c "import math; print int(math.ceil(math.log10($JOBS))) or 1"`
+ZEROS=`printf '0%.0s' {1..$SCALE}`
+
+echo "Preparing vertical files..."
+
+if [[ "$VERTICAL" =~ ^[[:space:]]*\| ]]; then
+    TMP_VERT="$TMP_PREF".vert
+    `echo "$VERTICAL "| sed 's/[[:space:]]*|//'` > $TMP_VERT
+else
+    TMP_VERT="$VERTICAL"
+fi
+
+if [ -z $DOCSTRUCTURE ]; then
+    split -a $SCALE -n $JOBS "$TMP_VERT" "$TMP_VERT"
+else
+    split_vertical "$TMP_VERT" $JOBS $DOCSTRUCTURE
+fi
+
+echo "Preparing configuration files..."
+
+for i in `seq -w $ZEROS $((JOBS-1))`; do
+    CONF="$TMP_PREF".conf.$i
+    sed -r "s/^[[:space:]]*(PATH|VERTICAL|DEFAULTATTR).*//" "$CONFFILE" > "$CONF"
+    # we remove DEFAULTATTR so that it cannot be set to a dynamic attribute
+    # which we do not compile
+    echo "PATH \"$TMP_PREF.dir.$i\"" >> "$CONF"
+    echo "VERTICAL \"$TMP_VERT.$i\"" >> "$CONF"
+done
+
+echo "Compiling corpus parts..."
+
+{ find "$TMP_DIR" -wholename "$TMP_PREF.conf.*" 2>/dev/null || : ; } |\
+parallel -v --gnu --tmpdir "$TMP_DIR" -j $JOBS --joblog "$TMP_PREF.encodevert.joblog" encodevert -d -c
+
+echo "Creating virtual corpus..."
+
+VIRTDEF="$TMP_PREF".virt
+echo "#Temporary virtual corpus created by parencodevert" > $VIRTDEF
+for i in `seq -w $ZEROS $((JOBS-1))`; do
+    echo "=$TMP_PREF".conf.$i >> $VIRTDEF
+    echo "0,$" >> $VIRTDEF
+done
+VIRTCONF="$TMP_PREF".conf.virt
+sed -r "s/^[[:space:]]*(PATH|VERTICAL|DEFAULTATTR).*//" "$CONFFILE" > "$VIRTCONF"
+# we remove DEFAULTATTR so that it cannot be set to a dynamic attribute
+# which we do not compile
+echo "PATH \"$TMP_PREF.dir.virt\"" >> "$VIRTCONF"
+echo "VIRTUAL \"$VIRTDEF\"" >> "$VIRTCONF"
+mkdir -p "$TMP_PREF.dir.virt" # prevent races if it would be created by mkvirt
+
+ATTRS=`corpinfo -g ATTRLIST $VIRTCONF`
+STRUCTATTRS=`corpinfo -g STRUCTATTRLIST $VIRTCONF`
+ATTRS=$ATTRS,$STRUCTATTRS
+( IFS=$','; for ATTR in $ATTRS; do
+    [ -z `corpinfo -g $ATTR.DYNAMIC $CORPUS` ] && echo mkvirt -d -a $ATTR "$TMP_PREF".conf.virt
+done ) | parallel -v --gnu --tmpdir "$TMP_DIR" -j $JOBS --joblog "$TMP_PREF.mkvirt.joblog"
+
+echo "Devirtualizing corpus..."
+
+devirt "$TMP_PREF".conf.virt "$PATH_" --dry-run |\
+grep -- '---DRY-RUN---' | sed 's/---DRY-RUN---//' |\
+parallel -v --gnu --tmpdir "$TMP_DIR" -j $JOBS --joblog "$TMP_PREF.devirt.joblog"
+
+echo "Parallel compilation finished."
+
+# vim: ts=4 sw=4 sta et sts=4 si:

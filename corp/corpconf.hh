@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2012  Pavel Rychly
+//  Copyright (c) 1999-2015  Pavel Rychly
 
 #ifndef CORPCONF_HH
 #define CORPCONF_HH
@@ -32,7 +32,9 @@ public:
     MSS& find_attr (const std::string &attr);
     CorpInfo* find_struct (const std::string &attr)
         {return find_sub (attr, structs);}
-
+    CorpInfo* add_attr (const std::string &path);
+    CorpInfo* add_struct (const std::string &path);
+    void set_opt (const std::string &path, const std::string &val);
     std::string &find_opt (const std::string &path);
     static bool str2bool (const std::string &str);
 
@@ -40,6 +42,7 @@ public:
 
 
 CorpInfo *loadCorpInfo (const std::string &corp_name_or_path);
+void languages (std::vector<std::string> &out);
 
 #endif
 

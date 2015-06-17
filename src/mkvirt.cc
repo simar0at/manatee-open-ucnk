@@ -1,6 +1,7 @@
-// Copyright (c) 2011-2013  Pavel Rychly
+// Copyright (c) 2011-2014  Pavel Rychly
 
 #include <finlib/writelex.hh>
+#include <finlib/log.hh>
 #include "virtcorp.hh"
 #include "corpus.hh"
 #include <sstream>
@@ -31,8 +32,9 @@ void compute_orgid (const string& target, int lexsize)
 {
     vector<int> org (lexsize, -1);
     FromFile<int32_t> newidf (target + ".nid");
-    for (int id=0; !newidf; ++newidf, id++) 
-        org[*newidf] = id;
+    for (int id=0; !newidf; ++newidf, id++)
+        if (*newidf != -1)
+            org[*newidf] = id;
 
     ToFile<int32_t> orgidf (target + ".oid");
     for (int id=0; id < lexsize; id++)
@@ -42,7 +44,7 @@ void compute_orgid (const string& target, int lexsize)
 void make_full_lex (VirtualCorpus *vcorp, const string& attrname,
                     const string& target)
 {
-    cerr << "make_full_lex:" << attrname << ", " << target << '\n';
+    CERR << "lexicon:" << attrname << ", " << target << '\n';
     PosAttr *a = vcorp->segs[0].corp->get_attr(attrname);
     copy_file (a->attr_path + ".lex", target + ".lex");
     copy_file (a->attr_path + ".lex.idx", target + ".lex.idx");
@@ -54,65 +56,128 @@ void make_full_lex (VirtualCorpus *vcorp, const string& attrname,
             newid(id);
         // closing newid -- .seg0.nid
     }
-    if (vcorp->segs.size() == 1)
-        return;
 
     write_lexicon wl (target, 500000);
     for (size_t i = 1; i < vcorp->segs.size(); i++) {
-        cerr << "make_full_lex: seg:" << i << '\n';
+        CERR << "lexicon: seg:" << i << '\n';
         a = vcorp->segs[i].corp->get_attr(attrname);
 
         ToFile<int32_t> newid (target + n2str(i, ".nid"));
-        int id, nid, id_range = a->id_range();
-        cerr << "make_full_lex: adding ids:" << id_range << '\n';
-        for (id = 0; id < id_range; id++) {
-            nid = wl.str2id (a->id2str (id));
-            newid (nid);
-        }
+        int id, id_range = a->id_range();
+        CERR << "lexicon: adding ids:" << id_range << '\n';
+        for (id = 0; id < id_range; id++)
+            newid (wl.str2id (a->id2str (id)));
     }
 
     ToFile<int64_t> freqs (target + ".frq");
-    int id, id_range = wl.size();
-    for (id = 0; id < id_range; id++)
-        freqs(0);
+    freqs(0);
 
     for (size_t i = 0; i < vcorp->segs.size(); i++)
         compute_orgid (target + n2str(i, ""), wl.size());
 }
 
-
-void compute_freqs (VirtualCorpus *vcorp, const string& attrname,
-                const string& target)
+void prune_lex (PosAttr *pa, const string& target)
 {
-    cerr << "make_full_lex: computing freqs\n";
-    PosAttr* a = setup_virtposattr (vcorp, target, attrname);
-    ToFile<int64_t> freqs (target + ".frq");
-    int id, id_range = a->id_range();
-    for (id = 0; id < id_range; id++) {
-        FastStream *s = a->id2poss(id);
+    CERR << "lexicon: pruning lexicon\n";
+    const string tmptarget = target + ".tmp";
+    {
+    int id_range = pa->id_range();
+    write_lexicon new_lex (tmptarget, min (500000, id_range));
+    ToFile<int64_t> freqs (tmptarget + ".frq");
+    for (int i = 0; i < id_range; i++) {
+        FastStream *s = pa->id2poss(i);
         Position fin = s->final();
-        int frq = 0;
+        NumOfPos frq = 0;
         while (s->next() < fin)
             frq++;
-        freqs(frq);
         delete s;
+        if (frq) {
+            new_lex.str2id (pa->id2str (i));
+            freqs (frq);
+        }
+    }
+    } // new_lex, freqs
+    rename ((tmptarget + ".lex").c_str(), (target + ".lex").c_str());
+    rename ((tmptarget + ".lex.idx").c_str(), (target + ".lex.idx").c_str());
+    rename ((tmptarget + ".lex.srt").c_str(), (target + ".lex.srt").c_str());
+    rename ((tmptarget + ".frq").c_str(), (target + ".frq").c_str());
+}
+
+void recompute_mappings (VirtualCorpus *vcorp, const string& attr,
+                       const string& target)
+{
+    map_lexicon wl (target);
+    for (size_t i = 0; i < vcorp->segs.size(); i++) {
+        CERR << "lexicon: mapping:" << i << '\n';
+        PosAttr *a = vcorp->segs[i].corp->get_attr (attr);
+        {
+        ToFile<int32_t> newid (target + n2str(i, ".nid"));
+        for (int id = 0; id < a->id_range(); id++)
+            newid (wl.str2id (a->id2str (id)));
+        } // newid
+        compute_orgid (target + n2str(i, ""), wl.size());
     }
 }
 
-void prune_lex (VirtualCorpus *vcorp, const string& attrname,
-                const string& target)
+void usage()
 {
-    //XXX delete zero-freq from lexicon
+    cerr << "Usage: mkvirt [-d] [-a ATTRLIST] CORPUS\n"
+         << "Options:\n"
+         << "-d           skip creating dynamic attributes\n"
+         << "-a ATTRLIST  compile only attributes in comma delimited\n"
+         << "             ATTRLIST, may contain <struct>.<attr> attributes\n";
 }
 
 int main (int argc, char **argv) 
 {
-    if (argc < 2) {
-        fputs ("usage: mkvirt CORPUS\n", stderr);
-        return 1;
+    string attrlist, structattrlist;
+    bool skip_dynamic = false;
+    int c;
+    while ((c = getopt (argc, argv, "?hda:")) != -1)
+        switch (c) {
+        case 'd':
+            skip_dynamic = true;
+            break;
+        case 'a':
+            {
+            istringstream as (optarg);
+            string attrname;
+            while (getline (as, attrname, ',')) {
+                if (strchr (attrname.c_str(), '.'))
+                    structattrlist += attrname + ",";
+                else
+                    attrlist += attrname + ",";
+            }
+            if (!attrlist.empty())
+                attrlist.erase(attrlist.length() - 1);
+            if (!structattrlist.empty())
+                structattrlist.erase(structattrlist.length() - 1);
+            }
+            break;
+        case 'h':
+        case '?':
+            usage();
+            return 2;
+        default:
+            cerr << "mkvirt: unknown option (" << c << ")\n";
+            usage();
+            return 2;
+        }
+
+    const char *corpname;
+    if (optind < argc) {
+        corpname = argv [optind];
+    } else {
+        usage();
+        return 2;
     }
+
     try {
-        Corpus corp(argv[1]);
+        Corpus corp(corpname);
+        if (attrlist.empty() && structattrlist.empty()) {
+            attrlist = corp.get_conf("ATTRLIST");
+            structattrlist = corp.get_conf("STRUCTATTRLIST");
+        }
         VirtualCorpus *vcorp = setup_virtcorp (corp.get_conf("VIRTUAL"));
         if (vcorp->segs.empty())
             return 2;
@@ -128,23 +193,24 @@ int main (int argc, char **argv)
             #define mkdir_args , S_IRWXU | S_IRWXG | S_IXOTH | S_IROTH
         #endif
             if (mkdir (corp_path.c_str() mkdir_args)) {
-                cerr << "mkvirt: cannot make directory `" << corp_path << "'\n";
+                CERR << "mkvirt: cannot make directory `" << corp_path << "'\n";
                 return 1;
             }
         }
         corp_path += '/';
 
-        istringstream as (corp.get_conf("ATTRLIST"));
+        istringstream as (attrlist);
         string attrname;
         while (getline (as, attrname, ',')) {
             if (corp.get_conf(attrname+".DYNAMIC") != "")
                 continue;
-            make_full_lex(vcorp, attrname, corp_path + attrname);
-            compute_freqs (vcorp, attrname, corp_path + attrname);
-            // XXX prune_lex (vcorp, attrname, corp_path + attrname);
+            const string path = corp_path + attrname;
+            make_full_lex(vcorp, attrname, path);
+            prune_lex (corp.get_attr (attrname), path);
+            recompute_mappings (vcorp, attrname, path);
         }
  
-        istringstream ss (corp.get_conf("STRUCTATTRLIST"));
+        istringstream ss (structattrlist);
         while (getline (ss, attrname, ',')) {
             if (corp.get_conf(attrname+".DYNAMIC") != "")
                 continue;
@@ -153,13 +219,30 @@ int main (int argc, char **argv)
             string atname (attrname, attrname.find ('.') +1);
             VirtualCorpus *vscorp = virtcorp2virtstruc (vcorp, strucname);
 
-            make_full_lex (vscorp, atname, corp_path + attrname);
-            compute_freqs (vscorp, atname, corp_path + attrname);
-            // XXX prune_lex (vscorp, attrname, corp_path + attrname);
+            const string path = corp_path + attrname;
+            make_full_lex (vscorp, atname, path);
+            Structure *struc = corp.get_struct (strucname);
+            prune_lex (struc->get_attr (atname), path);
+            recompute_mappings (vcorp, attrname, path);
             delete vscorp;
         }
+        // create dynamic attributes
+        if (!skip_dynamic) {
+            stringstream ds;
+            ds << attrlist << "," << structattrlist;
+            while (getline (ds, attrname, ',')) {
+                if (attrname.empty() || corp.get_conf(attrname+".DYNAMIC") == "")
+                    continue;
+                CERR << "Creating dynamic attribute " << attrname << endl;
+                stringstream cmd;
+                cmd << "mkdynattr " << corpname << " " << attrname;
+                if (system (cmd.str().c_str()) != 0)
+                    CERR << "ERROR: failed to create dynamic attribute "
+                         << attrname << "\n";
+            }
+        }
     } catch (exception &e) {
-        cerr << "mkvirt error: " << e.what() << '\n';
+        CERR << "mkvirt error: " << e.what() << '\n';
         return 1;
     }
     return 0;

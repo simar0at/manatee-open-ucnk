@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2013  Pavel Rychly, Milos Jakubicek
 
 
 #include "conccrit.hh"
@@ -245,6 +245,7 @@ protected:
     bool ignore_case;
     bool retrograde;
     bool empty_endbeg;
+    bool output_ids;
     const char *locale;
     const char *encoding;
     PosAttr *pa;
@@ -252,7 +253,8 @@ protected:
 
     criteria_base (Corpus *c, RangeStream *r, string attr_opt)
         : ignore_case (false), retrograde (false), empty_endbeg (false),
-        locale (NULL), encoding (c->get_conf ("ENCODING").c_str()) {
+        output_ids (false), locale (NULL),
+        encoding (c->get_conf ("ENCODING").c_str()) {
         strip_options (attr_opt);
         pa = c->get_attr (attr_opt);
         locale = pa->locale; // set default attribute locale
@@ -270,7 +272,7 @@ public:
     void strip_options (string &attr_opt) {
         int slash = attr_opt.find ('/');
         if (slash >= 0) {
-            ignore_case = retrograde = empty_endbeg = false;
+            ignore_case = retrograde = empty_endbeg = output_ids = false;
             for (unsigned i = slash +1; i < attr_opt.length(); i++) {
                 switch (attr_opt[i]) {
                 case 'e':
@@ -284,6 +286,8 @@ public:
                     break;
                 case 'r':
                     retrograde = true; break;
+                case 'n':
+                    output_ids = true; break;
                 case 'L':
                     {
                         string loc (attr_opt, i+1);
@@ -345,8 +349,14 @@ class crit_pos_attr : public criteria_base {
     Concordance::context *ctx;
 public:
     virtual const char *get_str (RangeStream *r) {
+        static char buff[10];
         Position pos = ctx->get (r);
-        return pa->pos2str (pos);
+        if (output_ids) {
+            snprintf (buff, 10, "%d", pa->pos2id (pos));
+            return buff;
+        }
+        else
+            return pa->pos2str (pos);
     }
     crit_pos_attr (Corpus *c, RangeStream *r, const string &attr,
                    const char *ctxstr)

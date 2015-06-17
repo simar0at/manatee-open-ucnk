@@ -1,4 +1,4 @@
-# Copyright (c) 2003-2013  Pavel Rychly
+# Copyright (c) 2003-2013  Pavel Rychly, Milos Jakubicek
 
 noinst_LTLIBRARIES = libconcord.la
 libconcord_la_SOURCES = conccrit.cc concctx.cc concedit.cc concget.cc \
@@ -12,5 +12,5 @@ else
 libconcord_la_SOURCES += $(concord_headers)
 endif
 
-AM_CPPFLAGS = -I$(top_srcdir)/corp -I$(top_srcdir)/query $(ZTHREAD_CPPFLAGS)
+AM_CPPFLAGS += -I$(top_srcdir)/corp -I$(top_srcdir)/query $(ZTHREAD_CPPFLAGS)
 

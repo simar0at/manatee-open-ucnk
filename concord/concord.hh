@@ -1,55 +1,12 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2014  Pavel Rychly, Milos Jakubicek
 
 #ifndef CONCORD_HH
 #define CONCORD_HH
 
 #include "corpus.hh"
-#include "config.hh"
-
-#ifdef HAVE_PTHREAD
-    #include <pthread.h>
-    #define mutex_t pthread_mutex_t
-    #define thread_t pthread_t
-    #define mutex_init(...) pthread_mutex_init (__VA_ARGS__)
-    #define mutex_destroy(...) pthread_mutex_destroy (__VA_ARGS__)
-    #define mutex_lock(...) pthread_mutex_lock (__VA_ARGS__)
-    #define mutex_trylock(...) pthread_mutex_trylock (__VA_ARGS__)
-    #define mutex_unlock(...) pthread_mutex_unlock (__VA_ARGS__)
-    #define thread_create(...) pthread_create (__VA_ARGS__)
-    #define thread_join(...) pthread_join (__VA_ARGS__)
-    #define thread_cleanup_push(...) pthread_cleanup_push (__VA_ARGS__)
-    #define thread_cleanup_pop(...) pthread_cleanup_pop (__VA_ARGS__)
-    #define thread_setcancelstate(...) pthread_setcancelstate (__VA_ARGS__)
-    #define thread_testcancel(...) pthread_testcancel(__VA_ARGS__)
-    #define thread_cancel(...) pthread_cancel(__VA_ARGS__)
-#else
-    #define mutex_t int
-    #define thread_t int
-    #define mutex_init(...)
-    #define mutex_destroy(...)
-    #define mutex_lock(...)
-    #define mutex_trylock(...)
-    #define mutex_unlock(...)
-    #define thread_create(id, attr, func, arg) func(arg)
-    #define thread_join(...)
-    #define thread_cleanup_push(...)
-    #define thread_cleanup_pop(...)
-    #define thread_setcancelstate(...)
-    #define thread_testcancel(...)
-    #define thread_cancel(...)
-#endif
 
 #include <iostream>
 #include <stdint.h>
-
-#if defined HAVE_EXT_HASH_MAP
-#include <ext/hash_map>
-#    if defined HAVE_GNU_CXX_NS
-         namespace std {using namespace __gnu_cxx;}
-#    endif
-#else
-#include <hash_map>
-#endif
 
 class ConcNotFound: public std::exception {
     const std::string _what;
@@ -77,6 +34,9 @@ struct collocitem {
 class ConcStream; // forward declare
 
 class Concordance {
+    void load_file (Corpus *corp, FILE *f, const string fname="");
+    void save (FILE *f, const char *filename=NULL, bool save_linegroup=false,
+               bool partial=false, bool append=false);
 public:
     //-------------------- Context --------------------
     class context {
@@ -100,14 +60,15 @@ protected:
     std::vector<ConcIndex> *view;
     typedef std::vector<short int> linegroup_t;
     linegroup_t *linegroup;
-    mutex_t *rng_mutex;
-    thread_t *thread_id;
+    void *rng_mutex;
+    void *thread_id;
     RangeStream *query;
     bool is_finished;
     ConcIndex sample_size;
     NumOfPos full_size;
     int label;
     bool added_align; // true for parallel corpus added by add_aligned()
+    int maxkwic;
     //------------------- CorpData ------------------------
     struct CorpData {
         std::vector<collocitem*> colls;
@@ -125,19 +86,20 @@ protected:
     friend void *eval_query_thread (void *conc);
     friend void free_rngmutex (void *conc);
     friend class ConcStream;
-    void lock() {
-        if (rng_mutex)
-            mutex_lock(rng_mutex);
-    }
-    void unlock() {
-        if (rng_mutex)
-            mutex_unlock(rng_mutex);
-    }
+    void lock();
+    void unlock();
     void ensure_view();
     template <class ConcData>
     void delete_lines (ConcData *data, ConcIndex newsize, int collnum,
                        bool positive, std::vector<ConcIndex> *view,
                        std::vector<ConcIndex> *revview);
+    template <class ConcData>
+    void delete_subpart_lines (ConcData *data, std::vector<ConcIndex> *view,
+                               std::vector<ConcIndex> *revview);
+    template <class ConcData>
+    void delete_struct_repeats_lines (ConcData *data,
+         std::vector<ConcIndex> *view, std::vector<ConcIndex> *revview,
+         const char *struc);
     //-------------------- public members --------------------
 public:
     static const int lngroup_labidx;
@@ -147,8 +109,11 @@ public:
     Concordance (Corpus *corp, RangeStream *query, int inccolln=0,
                  ConcIndex sample_size=0, NumOfPos full_size=0);
     Concordance (Concordance &x);
+    Concordance (Corpus *corp, int fileno);
     Concordance (Corpus *corp, const char *filename);
     ~Concordance ();
+    void save (int fileno, bool save_linegroup=false,
+               bool partial=false, bool append=false);
     void save (const char *filename, bool save_linegroup=false,
                bool partial=false, bool append=false);
     void sync ();
@@ -253,6 +218,8 @@ public:
     void make_grouping();
     void switch_aligned (const char *corpname);
     void add_aligned (const char *corpname);
+    void delete_subparts ();
+    void delete_struct_repeats (const char *struc);
 };
 
 #endif

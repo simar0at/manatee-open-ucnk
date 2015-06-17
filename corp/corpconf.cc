@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2012  Pavel Rychly
+//  Copyright (c) 1999-2015  Pavel Rychly
 
 #include "config.hh"
 #include "corpconf.hh"
@@ -39,15 +39,15 @@ string CorpInfo::dump (int indent) {
     string space;
     space.resize (indent, ' ');
     for (MSS::iterator i = opts.begin(); i != opts.end(); i++)
-        res += space + (*i).first + " = " + (*i).second + "\n";
+        res += space + (*i).first + " \"" + (*i).second + "\"\n";
     for (VSC::iterator i = attrs.begin(); i != attrs.end(); i++)
-        res += space + "ATTRIBUTE " + (*i).first + " = {\n" 
+        res += space + "ATTRIBUTE \"" + (*i).first + "\" {\n"
             + (*i).second->dump (indent +4) + space + "}\n";
     for (VSC::iterator i = structs.begin(); i != structs.end(); i++)
-        res += space + "STRUCTURE " +(*i).first + " = {\n" 
+        res += space + "STRUCTURE \"" +(*i).first + "\" {\n"
             + (*i).second->dump (indent +4) + space + "}\n";
     for (VSC::iterator i = procs.begin(); i != procs.end(); i++)
-        res += space + "PROCESS " +(*i).first + " = {\n" 
+        res += space + "PROCESS \"" +(*i).first + "\" {\n"
             + (*i).second->dump (indent +4) + space + "}\n";
     return res;
 }
@@ -75,9 +75,13 @@ void CorpInfo::set_defaults (CorpInfo *global, type_t d_type) {
     switch (type) {
     case Corpus_type:
         if (opts["DEFAULTATTR"].empty()) {
-            if (attrs.size() > 0)
-                opts["DEFAULTATTR"] = attrs[0].first;
-            else
+            for (unsigned i = 0; i < attrs.size(); i++) {
+                if (attrs[i].second->opts["DYNAMIC"].empty()) {
+                    opts["DEFAULTATTR"] = attrs[i].first;
+                    break;
+                }
+            }
+            if (opts["DEFAULTATTR"].empty())
                 opts["DEFAULTATTR"] = "word";
         }
         if (!opts["PATH"].empty()) {
@@ -97,6 +101,9 @@ void CorpInfo::set_defaults (CorpInfo *global, type_t d_type) {
         if (opts["NONWORDRE"] == "") {
             opts["NONWORDRE"] = "[^[:alpha:]].*";
         }
+        if (opts["MAXKWIC"] == "") {
+            opts["MAXKWIC"] = "100";
+        }
         if (opts["MAXCONTEXT"] == "") {
             opts["MAXCONTEXT"] = "100";
         }
@@ -105,6 +112,34 @@ void CorpInfo::set_defaults (CorpInfo *global, type_t d_type) {
         }
         if (opts["ALIGNSTRUCT"] == "") {
             opts["ALIGNSTRUCT"] = "align";
+        }
+        if (opts["SIMPLEQUERY"] == "") {
+            ostringstream oss;
+            oss << '[';
+            bool has_lc = false, has_lemma_lc = false,
+                 has_word = false, has_lemma = false;
+            for (unsigned i = 0; i < attrs.size(); i++) {
+                if (attrs[i].first == "lc")
+                    has_lc = true;
+                else if (attrs[i].first == "lemma_lc")
+                    has_lemma_lc = true;
+                else if (attrs[i].first == "word")
+                    has_word = true;
+                else if (attrs[i].first == "lemma")
+                    has_lemma = true;
+            }
+            if (has_lc)
+                oss << "lc=\"%s\"";
+            else if (has_word)
+                oss << "word=\"%s\"";
+            else
+                oss << opts["DEFAULTATTR"] << "=\"%s\"";
+            if (has_lemma_lc)
+                oss << " | lemma_lc=\"%s\"";
+            else if (has_lemma)
+                oss << " | lemma=\"%s\"";
+            oss << ']';
+            opts["SIMPLEQUERY"] = oss.str();
         }
         for (VSC::iterator i = attrs.begin(); i != attrs.end(); i++)
             (*i).second->set_defaults (this, Attr_type);
@@ -177,6 +212,63 @@ CorpInfo::MSS& CorpInfo::find_attr (const string &attr)
         return find_sub (attr, attrs)->opts;
 }
 
+CorpInfo* CorpInfo::add_attr (const string &path)
+{
+    int i;
+    CorpInfo *ci;
+    string attr_name;
+    if ((i = path.find ('.')) >= 0) {
+        string struct_name (path, 0, i);
+        attr_name = string (path, i+1);
+        ci = add_struct (struct_name);
+        opts["STRUCTATTRLIST"] = "";
+    } else {
+        attr_name = path;
+        ci = this;
+        opts["ATTRLIST"] = "";
+    }
+    try {
+        return find_sub (attr_name, ci->attrs);
+    } catch (CorpInfoNotFound &e) {}
+    CorpInfo* attr_ci = new CorpInfo();
+    attr_ci->set_defaults (this, Attr_type);
+    ci->attrs.push_back (pair<string,CorpInfo*>(attr_name, attr_ci));
+    return attr_ci;
+}
+
+CorpInfo* CorpInfo::add_struct (const string &path)
+{
+    try {
+        return find_sub (path, structs);
+    } catch (CorpInfoNotFound &e) {}
+    CorpInfo* struct_ci = new CorpInfo();
+    structs.push_back (pair<string,CorpInfo*>(path, struct_ci));
+    struct_ci->set_defaults (this, Struct_type);
+    opts["STRUCTLIST"] = "";
+    return struct_ci;
+}
+
+void CorpInfo::set_opt (const string &path, const string &val)
+{
+    int i;
+    if ((i = path.find ('.')) >= 0) {
+        string first (path, 0, i);
+        string rest (path, i+1);
+        try {
+            find_attr (first)[rest] = val;
+            return;
+        } catch (CorpInfoNotFound &e) {
+            try {
+                find_sub (first, procs)->opts [rest] = val;
+                return;
+            } catch (CorpInfoNotFound &e) {
+                return find_struct (first)->set_opt (rest, val);
+            }
+        }
+    }
+    opts[path] = val;
+}
+
 string &CorpInfo::find_opt (const string &path)
 {
     int i;
@@ -233,15 +325,27 @@ string &CorpInfo::find_opt (const string &path)
                 for (VSC::iterator j=procs.begin(); j != procs.end(); j++)
                     val += (*j).first + ',';
             } 
-#ifdef SKETCH_ENGINE
-            else if (path == "WSBASE") {
+#ifdef MANATEE_SKETCH_ENGINE
+            else if (path == "TERMBASE") {
+                return opts[path] = opts["PATH"] + "terms-ws";
+            } else if (path == "WSBASE") {
                 return opts[path] = opts["PATH"] + find_opt("WSATTR") + "-ws";
             } else if (path == "WSTHES") {
                 return opts[path] = opts["PATH"] + find_opt("WSATTR") + "-thes";
+            } else if (path == "WSMINHITS") {
+                return opts[path] = "0";
             } else if (path == "WSATTR") {
+                try {
+                    find_sub ("lempos_lc", attrs);
+                    return opts[path] = "lempos_lc";
+                } catch (CorpInfoNotFound &e){}
                 try {
                     find_sub ("lempos", attrs);
                     return opts[path] = "lempos";
+                } catch (CorpInfoNotFound &e){}
+                try {
+                    find_sub ("lemma_lc", attrs);
+                    return opts[path] = "lemma_lc";
                 } catch (CorpInfoNotFound &e){}
                 try {
                     find_sub ("lemma", attrs);

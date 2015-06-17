@@ -1,4 +1,6 @@
-SUBDIRS = $(FINLIB_SUBDIRS) libltdl corp query concord src api
+SUBDIRS = $(FINLIB_SUBDIRS) corp query concord src api
+ACLOCAL_AMFLAGS = -I config
+
 doxygen:
 	doxygen
 

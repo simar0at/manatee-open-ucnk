@@ -1,4 +1,4 @@
-//  Copyright (c) 2004-2013  Pavel Rychly
+//  Copyright (c) 2004-2014  Pavel Rychly, Milos Jakubicek
 
 #ifndef VIRTCORP_HH
 #define VIRTCORP_HH
@@ -31,12 +31,14 @@ public:
     //string path;
 
     virtual Position size() {return segs.back().postrans.back().newpos;}
+    virtual ~VirtualCorpus() {}
     //VirtualCorpus(const string &path) : path(path){}
 };
 
 VirtualCorpus* setup_virtcorp (const std::string &filename);
 PosAttr* setup_virtposattr (VirtualCorpus *vc, const std::string &path,
-                            const std::string &name, bool ownedByCorpus=true);
+                            const std::string &name, const std::string &locale,
+                            const std::string &enc, bool ownedByCorpus=true);
 ranges* setup_virtstructrng (VirtualCorpus *vc, const std::string &name);
 VirtualCorpus* virtcorp2virtstruc (VirtualCorpus *vc, const std::string &name);
 

@@ -1,8 +1,10 @@
-# Copyright (c) 2003-2008  Pavel Rychly
+# Copyright (c) 2003-2015  Pavel Rychly, Milos Jakubicek
 
 pkglib_LTLIBRARIES =
 
-dist_bin_SCRIPTS = addwcattr  concinfo  corpquery  decodevert  freqs  lslexarf  lsslex  mksubc  compilecorp
+dist_bin_SCRIPTS = addwcattr concinfo corpquery decodevert freqs lslexarf \
+   lsslex mksubc compilecorp mksizes devirt parencodevert mkstats corpcheck \
+   par2tokens tokens2dict dumpalign
 
 if PYTHON_API_ENABLED
 pyexec_LTLIBRARIES = _manatee.la
@@ -33,13 +35,28 @@ manatee_ruby_la_LDFLAGS = -module -avoid-version -no-undefined $(PTHREAD_LIBS)
 libmanatee_jni_la_SOURCES = manatee_java_wrap.cc
 libmanatee_jni_la_LDFLAGS = -module -avoid-version -no-undefined $(PTHREAD_LIBS)
 
-if LOCALBZR
 SWIGAPI = manatee.i common.i
-manatee_py_wrap.cc manatee.py: $(SWIGAPI)
+manatee_py_wrap.cc: $(SWIGAPI)
 	$(SWIG) -python -c++ -shadow -o $@ $<
+manatee.py: manatee_py_wrap.cc
+	@if test -f $@; then \
+	  touch $@; \
+	else \
+	## Recover from the removal of $@
+	rm -f manatee_py_wrap.cc; \
+	$(MAKE) $(AM_MAKEFLAGS) manatee_py_wrap.cc; \
+	fi
 
-manatee_pe_wrap.cc manatee.pm: $(SWIGAPI)
+manatee_pe_wrap.cc: $(SWIGAPI)
 	$(SWIG) -perl  -c++ -shadow -o $@ $<
+manatee.pm: manatee_pe_wrap.cc
+	@if test -f $@; then \
+	  touch $@; \
+	else \
+	## Recover from the removal of $@
+	rm -f manatee_pe_wrap.cc; \
+	$(MAKE) $(AM_MAKEFLAGS) manatee_pe_wrap.cc; \
+	fi
 
 manatee_rb_wrap.cc: $(SWIGAPI)
 	$(SWIG) -ruby  -c++ -o $@ $<
@@ -49,9 +66,8 @@ JAVA_PACKAGE_NAME=com.sketchengine.manatee
 manatee_java_wrap.cc: $(SWIGAPI)
 	mkdir -p java
 	$(SWIG) -java -c++ -package $(JAVA_PACKAGE_NAME)  -o $@ -outdir java $<
-endif
 
-EXTRA_DIST = corpquery.pl java example.java
+EXTRA_DIST = corpquery.pl java example.java manatee.i common.i
 
 NEEDED_LIBS =  $(FINLIB_LDFLAG) $(ANTLR_LDFLAG) $(REGEX_LDFLAG)
 

@@ -1,4 +1,4 @@
-//  Copyright (c) 1999-2012  Pavel Rychly
+//  Copyright (c) 1999-2012  Pavel Rychly, Milos Jakubicek
 
 #ifndef EXCEP_HH
 #define EXCEP_HH

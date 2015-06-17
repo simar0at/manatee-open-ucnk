@@ -1,4 +1,4 @@
-// Copyright (c) 1999-2012  Pavel Rychly
+// Copyright (c) 1999-2014  Pavel Rychly, Milos Jakubicek
 
 #include <finlib/fstream.hh>
 #include <finlib/writelex.hh>
@@ -17,7 +17,7 @@
 #include <regex.h>
 #endif
 #include <unistd.h>
-#if defined DARWIN
+#if defined MANATEE_DARWIN
 #include <sys/sysctl.h>
 #endif
 #include <limits>
@@ -36,6 +36,9 @@ MWR *show_structs = NULL;
 bool append_opt = false;
 long int bucket_size = 10000;
 long int max_memory = 0;
+vector<string> dynattrs;
+bool skip_regexopt = false;
+string corpname = "";
 
 const char *fileline();
 
@@ -158,7 +161,7 @@ long long int available_memory ()
 {
     long long int mem;
     void *x;
-#if defined DARWIN
+#if defined MANATEE_DARWIN
     int mib[2];
     size_t len;
 
@@ -196,11 +199,23 @@ public:
     virtual void fill_up_to (Position pos) = 0;
     virtual void write (const char *str, Position pos, const char *curr_fileline=0) = 0;
     Position get_pos() {return currpos;}
+    virtual void compile_regexopt () {
+        if (!skip_regexopt && !corpname.empty()) {
+            size_t slash = name.rfind('/');
+            if (slash != name.npos)
+                name = string (name, slash + 1);
+            CERR << "Creating regular expression optimization attribute "
+                 << name << endl;
+            if (system (("mkregexattr " + corpname + " " + name).c_str()) != 0)
+                CERR << "ERROR: failed to create regular expression attribute "
+                     << name << endl;
+        }
+    }
 };
 
 class write_full_attr: public write_attr {
 protected:
-    write_lexicon lex;
+    write_lexicon *lex;
     RevFileConsumer *rev;
     TextConsumer *corp;
     bool multivalue;
@@ -211,13 +226,18 @@ public:
                 const char *def="", bool multiv=false, const char multis=',',
                 const char *lexiconsize="")
         : write_attr (filename, def),
-        lex (filename, tt_scaling(tt, lex_mem, lexiconsize)),
+        lex (new write_lexicon(filename, tt_scaling(tt, lex_mem, lexiconsize))),
         rev (RevFileConsumer::create (name, tt_scaling(tt, rev_mem), 1, append_opt)),
         corp (TextConsumer::create (tt, name, append_opt)),
         multivalue (multiv), multisep (multis) {
         currpos = append_opt ? corp->curr_size() : 0;
     }
-    ~write_full_attr () {delete corp; delete rev;}
+    ~write_full_attr () {
+        size_t lex_size = lex->size();
+        delete lex; delete corp; delete rev;
+        if (lex_size > 10000)
+            compile_regexopt();
+    }
     void write (char *str, const char *curr_fileline = 0) {
         if (!str)
             str = default_val;
@@ -232,7 +252,7 @@ public:
             }
             CERR << curr_fileline << "stripping space in attribute value\n";
         }
-        int id = lex.str2id (str);
+        int id = lex->str2id (str);
         corp->put (id);
         rev->put (id, currpos);
         if (multivalue) {
@@ -243,7 +263,7 @@ public:
                     value[1] = 0;
                     while (*str) {
                         value[0] = *str;
-                        rev->put (lex.str2id (value), currpos);
+                        rev->put (lex->str2id (value), currpos);
                     }
                 }
             } else if (strchr (str, multisep)) {
@@ -257,7 +277,7 @@ public:
                 for (char *s = my_strtok (save_ptr, multisep, endofval); 
                      !endofval; 
                      s = my_strtok (save_ptr, multisep, endofval)) {
-                    rev->put (lex.str2id (s), currpos);
+                    rev->put (lex->str2id (s), currpos);
                 }
             }
         }
@@ -266,7 +286,7 @@ public:
     void fill_up_to (Position pos) {
         int id;
         if (currpos < pos) {
-            id = lex.str2id (default_val);
+            id = lex->str2id (default_val);
             while (currpos < pos) {
                 corp->put (id);
                 rev->put (id, currpos++);
@@ -290,13 +310,19 @@ public:
 
 class write_unique_attr: public write_attr {
 protected:
-    write_unique_lexicon lex;
+    write_unique_lexicon *lex;
 public:
     write_unique_attr (const string &filename, const char *def="")
-        : write_attr(filename, def), lex (filename) {
-        currpos = append_opt ? lex.size() : 0;
+        : write_attr(filename, def), lex (new write_unique_lexicon(filename)) {
+        currpos = append_opt ? lex->size() : 0;
     }
-    ~write_unique_attr () { /* XXX check that lex is indeed unique */ }
+    ~write_unique_attr () {
+        /* XXX check that lex is indeed unique */
+        size_t lex_size = lex->size();
+        delete lex;
+        if (lex_size > 10000)
+            compile_regexopt();
+    }
     void write (char *str, const char *curr_fileline = 0) {
         if (!str)
             str = default_val;
@@ -311,12 +337,12 @@ public:
             }
             CERR << curr_fileline << "stripping space in attribute value\n";
         }
-        lex.str2id (str);
+        lex->str2id (str);
         currpos++;
     }
     void fill_up_to (Position pos) {
         for (; currpos < pos; currpos++)
-            lex.str2id (default_val);
+            lex->str2id (default_val);
     }
     void write (const char *str, Position pos, const char *curr_fileline=0) {
         if (pos < currpos) {
@@ -537,6 +563,13 @@ public:
             // add missing attributes present in configuration
             for (CorpInfo::VSC::iterator i = structci->attrs.begin();
                  i != structci->attrs.end(); i++) {
+                CorpInfo::MSS &ao = (*i).second->opts;
+                if (ao["DYNAMIC"] != "") {
+                    // store dynamic attributes for postprocessing
+                    if (ao["DYNTYPE"] != "plain")
+                        dynattrs.push_back (base + ("." + (*i).first));
+                    continue;
+                }
                 if (!attrs[(*i).first]) {
                     attrs[(*i).first] = new_write_attr(path + '.' + (*i).first,
                                         structci->find_attr ((*i).first),
@@ -660,6 +693,7 @@ int encode (const string &corp_name, const string &corp_path,
 {
     CorpInfo *ci = NULL;
     if (!corp_name.empty()) {
+        corpname = corp_name;
         ci = loadCorpInfo (corp_name);
 
         // set memory limits to process input without running out of memory
@@ -695,7 +729,6 @@ int encode (const string &corp_name, const string &corp_path,
     path += '/';
     typedef vector<write_attr*> VWA;
     VWA attrs;
-    vector<string> dynattrs;
     
     // input file
     FILE *in_file = open_source (in_name, ci);
@@ -874,7 +907,9 @@ int encode (const string &corp_name, const string &corp_path,
         for (vector<string>::iterator i=dynattrs.begin();
              i != dynattrs.end(); i++) {
             CERR << "Creating dynamic attribute " << *i << endl;
-            system (("mkdynattr " + corp_name + " " + *i).c_str());
+            if (system (("mkdynattr " + corp_name + " " + *i).c_str()) != 0)
+                CERR << "ERROR: failed to create dynamic attribute "
+                     << *i << endl;
         }
     }
     return 0;
@@ -883,18 +918,20 @@ int encode (const string &corp_name, const string &corp_path,
 void usage (const char *progname) {
     cerr << "Usage: " << progname << " [OPTIONS] [FILENAME]\n"
          << "Creates a new corpus from a vertical text in file FILENAME or stdin.\n\n"
-         << "    -b            use `FD_FGD' attribute type\n"
-         << "                  Using this option you can create big corpora\n"
-         << "                  containing up to 2048 million tokens.\n"
-         << "    -x            use XML style of structures\n"
-         << "    -a ATTRS      comma delimited list of attributes\n"
-         << "    -s STRUCTS    comma delimited list of structures\n"
          << "    -c CORPNAME   corpus name in registry or corpus configuration file path\n"
          << "    -p CORPDIR    path to the corpus directory\n"
          << "    -v            verbose messages\n"
          << "    -e            append data to the end of an existing corpus\n"
          << "    -m MEM        use at most MEM MB of memory\n"
          << "    -d            do NOT compile dynamic attributes\n"
+         << "    -r            do NOT compile regular expression optimization attributes\n"
+         << "Options below apply only if configuration file is not supplied via -c option\n"
+         << "    -b            use `FD_FGD' attribute type\n"
+         << "                  Use this option when creating corpora over ca 250M tokens\n"
+         << "                  (encodevert will stop processing if this option is necessary and was not specified)\n"
+         << "    -x            use XML style of structures\n"
+         << "    -a ATTRS      comma delimited list of attributes\n"
+         << "    -s STRUCTS    comma delimited list of structures\n"
          << "\nExamples:\n"
          << "   encodevert -c susanne susanne.vert\n"
          << "   encodevert -a word,lemma -x -s doc,p -a tag -p /nlp/corp/desam desam.vert\n"
@@ -917,7 +954,7 @@ int main (int argc, char **argv)
     {
         // process options
         int c;
-        while ((c = getopt (argc, argv, "c:a:s:p:bxvedh?m:")) != -1)
+        while ((c = getopt (argc, argv, "c:a:s:p:bxvedrh?m:")) != -1)
             switch (c) {
             case 'c':
                 corpname = optarg;
@@ -950,6 +987,9 @@ int main (int argc, char **argv)
                 break;
             case 'd':
                 od = true;
+                break;
+            case 'r':
+                skip_regexopt = true;
                 break;
             case '?':
             case 'h':

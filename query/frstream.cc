@@ -1,4 +1,4 @@
-// Copyright (c) 1999-2010  Pavel Rychly
+// Copyright (c) 1999-2015  Pavel Rychly, Milos Jakubicek
 
 #include <finlib/frstream.hh>
 #include "frsop.hh"
@@ -78,14 +78,78 @@ bool Pos2Range::epsilon() const
     return false;
 }
 
+//-------------------- OneRange --------------------
+
+bool OneRange::next ()
+{
+    finished = true; return false;
+}
+
+Position OneRange::peek_beg () const
+{
+    return finished ? finval : beg;
+}
+
+Position OneRange::peek_end () const
+{
+    return finished ? finval : end;
+}
+
+void OneRange::add_labels (Labels &lab) const
+{
+}
+
+Position OneRange::find_beg (Position pos)
+{
+    if (pos > beg)
+        finished = true;
+    if (finished)
+        return finval;
+    return beg;
+}
+
+Position OneRange::find_end (Position pos)
+{
+    if (pos > end)
+        finished = true;
+    if (finished)
+        return finval;
+    return beg;
+}
+
+NumOfPos OneRange::rest_min () const
+{
+    return finished ? 0 : 1;
+}
+
+NumOfPos OneRange::rest_max () const
+{
+    return finished ? 0 : 1;
+}
+
+Position OneRange::final () const
+{
+    return finval;
+}
+
+int OneRange::nesting() const
+{
+    return 0;
+}
+
+bool OneRange::epsilon() const
+{
+    return false;
+}
 
 //-------------------- RQinNode --------------------
 
-RQinNode::RQinNode (RangeStream *in, RangeStream *out)
+RQinNode::RQinNode (RangeStream *in, RangeStream *out, bool do_locate)
     :inside (in), outside (out), infin (in->final()), outfin (out->final()),
      finished (false)
 {
-    locate();
+    if (do_locate)
+        locate();
 }
 
 Position RQinNode::locate ()
@@ -175,12 +239,49 @@ bool RQinNode::epsilon() const
     return inside->epsilon();
 }
 
+//-------------------- RQnotInNode --------------------
+
+RQnotInNode::RQnotInNode (RangeStream *in, RangeStream *out)
+    :RQinNode (in, out, false)
+{
+    locate();
+}
+
+Position RQnotInNode::locate ()
+{
+    if (finished)
+        return infin;
+    while (true) {
+        if (inside->peek_beg() >= infin) {
+            finished = true;
+            return infin;
+        }
+        if (!outside->end() && outside->peek_end() < inside->peek_end()) {
+            outside->find_end (inside->peek_end());
+            continue;
+        }
+        if (!outside->end() && inside->peek_beg() >= outside->peek_beg()
+                            && inside->peek_end() <= outside->peek_end()) {
+            inside->next();
+            continue;
+        } else
+            return inside->peek_beg();
+    }
+}
+
 //-------------------- RQoutsideNode --------------------
 
 RQoutsideNode::RQoutsideNode (RangeStream *rs)
     :src (rs), finval (src->final()), curr_beg (0), curr_end (0)
 {
     locate();
+}
+
+RangeStream *RQoutsideNode::create (RangeStream *src, Position maxpos)
+{
+    if (src->end())
+        return new OneRange (0, maxpos, maxpos + 1);
+    return new RQoutsideNode (src);
 }
 
 void RQoutsideNode::locate ()
@@ -190,7 +291,12 @@ void RQoutsideNode::locate ()
         src->next();
     }
     if (src->end()) {
-        curr_beg = curr_end = finval;
+        if (curr_end < finval - 1) {
+            curr_beg = curr_end;
+            curr_end = finval - 1;
+        } else {
+            curr_beg = curr_end = finval;
+        }
     } else {
         curr_beg = curr_end;
         curr_end = src->peek_beg();
@@ -261,11 +367,12 @@ bool RQoutsideNode::epsilon() const
 
 //-------------------- RQcontainNode --------------------
 
-RQcontainNode::RQcontainNode (RangeStream *out, RangeStream *in)
+RQcontainNode::RQcontainNode (RangeStream *out, RangeStream *in, bool do_locate)
     :inside (in), outside (out), infin (in->final()), outfin (out->final()),
      finished (false)
 {
-    locate();
+    if (do_locate)
+        locate();
 }
 
 Position RQcontainNode::locate ()
@@ -355,6 +462,44 @@ bool RQcontainNode::epsilon() const
     return outside->epsilon();
 }
 
+//-------------------- RQnotContainNode --------------------
+
+RQnotContainNode::RQnotContainNode (RangeStream *out, RangeStream *in)
+    :RQcontainNode (out, in, false)
+{
+    locate();
+}
+
+Position RQnotContainNode::locate ()
+{
+    if (finished)
+        return outfin;
+    while (true) {
+        if (outside->peek_beg() >= outfin) {
+            finished = true;
+            return outfin;
+        }
+        if (!inside->end() && inside->peek_beg() < outside->peek_beg()) {
+            inside->find_beg (outside->peek_beg());
+            continue;
+        }
+        if (!inside->end() && inside->peek_beg() >= outside->peek_beg()
+                           && inside->peek_end() <= outside->peek_end()) {
+            outside->next();
+            continue;
+        } else
+            return outside->peek_beg();
+    }
+}
+
+Position RQnotContainNode::find_end (Position pos)
+{
+    if (finished)
+        return outfin;
+    outside->find_end (pos);
+    return locate();
+}
+
 //-------------------- RQUnionNode --------------------
 
 inline void RQUnionNode::updatefirst()
@@ -402,6 +547,8 @@ Position RQUnionNode::peek_end () const
 void RQUnionNode::add_labels (Labels &lab) const
 {
     src [first]->add_labels (lab);
+    if (peek_s [!first].beg < finval [!first] && peek_s[0] == peek_s[1])
+        src [!first]->add_labels(lab);
 }
 
 Position RQUnionNode::find_beg (Position pos)

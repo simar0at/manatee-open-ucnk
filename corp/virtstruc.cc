@@ -1,4 +1,4 @@
-//  Copyright (c) 2012-2013  Pavel Rychly
+//  Copyright (c) 2012-2014  Pavel Rychly
 
 #include "corpus.hh"
 #include "virtcorp.hh"
@@ -42,6 +42,14 @@ public:
         Trans &t  = (*segs[sg].postrans)[tr];
         return pos - t.newpos + t.orgpos;
     }
+    inline NumOfPos org2newnum (NumOfPos num, size_t sg, size_t tr) {
+        Trans &t  = (*segs[sg].postrans)[tr];
+        return num - t.orgnum + t.newnum;
+    }
+    inline NumOfPos new2orgnum (NumOfPos num, size_t sg, size_t tr) {
+        Trans &t  = (*segs[sg].postrans)[tr];
+        return num - t.newnum + t.orgnum;
+    }
     // original position inside the sg/tr transition
     inline bool intrans (Position pos, size_t sg, size_t tr) {
         Trans *t  = &(*segs[sg].postrans)[tr];
@@ -62,9 +70,13 @@ public:
                 t.orgpos = pt[j].orgpos;
                 t.newpos = pt[j].newpos;
                 if (j+1 < pt.size()) {
-                    t.orgnum = s->src->num_at_pos(t.orgpos);
-                    NumOfPos tonum = s->src->num_at_pos(t.orgpos - t.newpos
-                                                        + pt[j+1].newpos);
+                    t.orgnum = s->src->num_next_pos(t.orgpos);
+                    if (t.orgnum < 0)
+                        t.orgnum = s->src->size();
+                    NumOfPos tonum = s->src->num_next_pos(t.orgpos - t.newpos
+                                                          + pt[j+1].newpos);
+                    if (tonum < 0)
+                        tonum = s->src->size();
                     t.newnum = lastnum;
                     lastnum += tonum - t.orgnum;
                 } else {
@@ -77,7 +89,7 @@ public:
     }
     virtual ~VirtualRanges() {}
 protected:
-    Position locate_tran_pos (Position pos, int &segnum, int &trannum) {
+    Position locate_tran_pos (Position pos, unsigned &segnum, unsigned &trannum) {
         // locate transition containing newpos pos, returns original position
         // XXX don't start from 0 for big postrans vectors
         segnum = trannum = 0;
@@ -89,11 +101,10 @@ protected:
         while (trannum < segs[segnum].postrans->size() -1 &&
                pos >= (*segs[segnum].postrans)[trannum +1].newpos)
             trannum++;
-        return pos - (*segs[segnum].postrans)[trannum].newpos 
-            + (*segs[segnum].postrans)[trannum].orgpos;
+        return new2orgpos (pos, segnum, trannum);
     }
 
-    Position locate_tran_num (NumOfPos idx, int &segnum, int &trannum) {
+    Position locate_tran_num (NumOfPos idx, unsigned &segnum, unsigned &trannum) {
         // locate transition containing newpos pos, returns original position
         // XXX don't start from 0 for big postrans vectors
         segnum = trannum = 0;
@@ -105,19 +116,17 @@ protected:
         while (trannum < segs[segnum].postrans->size() -1 &&
                idx >= (*segs[segnum].postrans)[trannum +1].newnum)
             trannum++;
-        return idx - (*segs[segnum].postrans)[trannum].newnum
-            + (*segs[segnum].postrans)[trannum].orgnum;
+        return new2orgnum (idx, segnum, trannum);
     }
 
-
     class WholeRStream: public RangeStream {
+    protected:
         VirtualRanges *vr;
-        int sg, tr;
+        unsigned sg, tr;
         RangeStream *curr;
         void locate () {
             do {
-                if (! curr || curr->end() 
-                    || tr >= int(vr->segs[sg].postrans->size())) {
+                if (curr->end() || tr >= vr->segs[sg].postrans->size()) {
                     delete curr;
                     if (++sg >= vr->segs.size()) {
                         curr = NULL;
@@ -125,9 +134,11 @@ protected:
                     }
                     curr = vr->segs[sg].src->whole();
                     tr = 0;
-                } else if (! vr->intrans(curr->peek_beg(), sg, tr))
+                    curr->find_beg((*vr->segs[sg].postrans)[tr].orgpos);
+                } else if (! vr->intrans(curr->peek_beg(), sg, tr)) {
                     ++tr;
-                curr->find_beg((*vr->segs[sg].postrans)[tr].orgpos);
+                    curr->find_beg((*vr->segs[sg].postrans)[tr].orgpos);
+                }
             } while (! vr->intrans (curr->peek_beg(), sg, tr));
         }
     public:
@@ -157,11 +168,15 @@ protected:
         virtual Position find_beg (Position pos) {
             if (! curr)
                 return vr->finval;
-            // XXX do not delete
-            delete curr;
-            curr = NULL;
-            if (vr->locate_tran_pos (pos, sg, tr) < 0)
+            unsigned old_sg = sg;
+            if (vr->locate_tran_pos (pos, sg, tr) < 0) {
+                curr = NULL;
                 return vr->finval;
+            }
+            if (old_sg != sg) {
+                delete curr;
+                curr = vr->segs[sg].src->whole();
+            }
             locate();
             if (! curr)
                 return vr->finval;
@@ -170,15 +185,18 @@ protected:
         virtual Position find_end (Position pos) {
             if (! curr)
                 return vr->finval;
-            // XXX do not delete, locate sg/tr after find_end
-            delete curr;
+            unsigned old_sg = sg;
             if (vr->locate_tran_pos (pos, sg, tr) < 0) {
                 curr = NULL;
                 return vr->finval;
             }
-            curr = vr->segs[sg].src->whole();
-            --tr;
+            if (old_sg != sg) {
+                delete curr;
+                curr = vr->segs[sg].src->whole();
+            }
             locate();
+            if (! curr)
+                return vr->finval;
             return vr->org2newpos (curr->peek_beg(), sg, tr);
         }
         virtual NumOfPos rest_min () const {return 0;}
@@ -188,13 +206,101 @@ protected:
         virtual bool epsilon () const {return false;}
     };
 
+    class PartRStream: public RangeStream {
+    protected:
+        VirtualRanges *vr;
+        unsigned sg, tr;
+        FastStream *filter;
+        Position filterlast;
+        NumOfPos currnum;
+        bool locate () {
+            if (currnum >= filterlast)
+                return false;
+            if (currnum <= filter->peek())
+                currnum = filter->peek();
+            else
+                currnum = filter->find (currnum);
 
+            while (sg < vr->segs.size() && 
+                   currnum >= vr->segs[sg].postrans->back().newnum)
+                sg++;
+            if (sg >= vr->segs.size())
+                return false;
+            while (tr < vr->segs[sg].postrans->size() -1 &&
+                   currnum >= (*vr->segs[sg].postrans)[tr +1].newnum)
+                tr++;
+
+            return currnum < filterlast; 
+        }
+    public:
+        PartRStream (VirtualRanges *vr, FastStream *filter)
+            : vr (vr),  sg(0), tr(0), filter (filter), 
+              filterlast (filter->final()), currnum (0)
+        { locate(); }
+        ~PartRStream () { delete filter; }
+        virtual bool next () {
+            filter->next();
+            return locate();
+        }
+        virtual Position peek_beg () const {
+            if (currnum >= filterlast)
+                return vr->finval;
+            return vr->org2newpos (vr->segs[sg].src->beg_at
+                                   (vr->new2orgnum(currnum, sg, tr)),
+                                   sg, tr);
+        }
+        virtual Position peek_end () const {
+            if (currnum >= filterlast)
+                return vr->finval;
+            return vr->org2newpos (vr->segs[sg].src->end_at
+                                   (vr->new2orgnum(currnum, sg, tr)),
+                                   sg, tr);
+        }
+        // no labels
+        virtual void add_labels (Labels &lab) const {}
+        virtual Position find_beg (Position pos) {
+            if (currnum >= filterlast)
+                return vr->finval;
+            Position p = vr->locate_tran_pos (pos, sg, tr);
+            if (p < 0)
+                return vr->finval;
+            NumOfPos orgidx = vr->segs[sg].src->num_next_pos(p);
+            if (vr->org2newpos(vr->segs[sg].src->beg_at(orgidx), sg, tr) < pos)
+                orgidx++;
+            currnum = vr->org2newnum (orgidx, sg, tr);
+            if (locate())
+                return vr->org2newpos (vr->segs[sg].src->beg_at(orgidx), 
+                                       sg, tr);
+            return vr->finval;
+        }
+        virtual Position find_end (Position pos) {
+            if (currnum >= filterlast)
+                return vr->finval;
+            Position p = vr->locate_tran_pos (pos, sg, tr);
+            if (p < 0)
+                return vr->finval;
+            NumOfPos orgidx = vr->segs[sg].src->num_next_pos(p);
+            if (vr->org2newpos(vr->segs[sg].src->end_at(orgidx), sg, tr) < pos)
+                orgidx++;
+            currnum = vr->org2newnum (orgidx, sg, tr);
+            if (locate())
+                return vr->org2newpos (vr->segs[sg].src->beg_at(orgidx), 
+                                       sg, tr);
+            return vr->finval;
+        }
+        virtual NumOfPos rest_min () const {return 0;}
+        virtual NumOfPos rest_max () const {return filterlast - currnum;}
+        virtual Position final () const {return vr->finval;}
+        virtual int nesting () const {return 0;} // nested structures not supported
+        virtual bool epsilon () const {return false;}
+
+    };
 
 public:
     virtual NumOfPos size () {return segs.back().postrans->back().newnum;}
 
     virtual Position beg_at (NumOfPos idx) {
-        int sg=0, tr=0;
+        unsigned sg=0, tr=0;
         Position n = locate_tran_num (idx, sg, tr);
         if (n < 0)
             return finval;
@@ -202,7 +308,7 @@ public:
             + (*segs[sg].postrans)[tr].newpos; 
     }
     virtual Position end_at (NumOfPos idx) {
-        int sg=0, tr=0;
+        unsigned sg=0, tr=0;
         Position n = locate_tran_num (idx, sg, tr);
         if (n < 0)
             return finval;
@@ -210,18 +316,18 @@ public:
             + (*segs[sg].postrans)[tr].newpos;
     }
     virtual NumOfPos num_at_pos (Position pos) {
-        int sg=0, tr=0;
+        unsigned sg=0, tr=0;
         Position p = locate_tran_pos (pos, sg, tr);
         if (p < 0)
-            return size(); // XXX ??
+            return -1;
         return segs[sg].src->num_at_pos(p) - (*segs[sg].postrans)[tr].orgnum
             + (*segs[sg].postrans)[tr].newnum;
     }
     virtual NumOfPos num_next_pos (Position pos) {
-        int sg=0, tr=0;
+        unsigned sg=0, tr=0;
         Position p = locate_tran_pos (pos, sg, tr);
         if (p < 0)
-            return size(); // XXX ??
+            return size();
         Position x = segs[sg].src->num_next_pos(p) - (*segs[sg].postrans)[tr].orgnum
             + (*segs[sg].postrans)[tr].newnum;
         return x;
@@ -230,12 +336,10 @@ public:
         return new WholeRStream (this);
     }
     virtual RangeStream *part(FastStream *p) {
-        RangeStream *s = new WholeRStream (this);
-        s->find_beg(s->final()); // empty stream
-        return s; // XXX part range
+        return new PartRStream (this, p);
     }
     virtual int nesting_at (NumOfPos idx) {
-        // XXX nested structures not supported
+        // nested structures not supported
         return 0;
     }
 };
@@ -268,3 +372,5 @@ VirtualCorpus* virtcorp2virtstruc (VirtualCorpus *vc, const std::string &name)
     }
     return vs;
 }
+
+// vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:

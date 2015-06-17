@@ -1,10 +1,16 @@
-//  Copyright (c) 1999-2013  Pavel Rychly
+//  Copyright (c) 1999-2014  Pavel Rychly, Milos Jakubicek
 
-#include "corpus.hh"
+#include "config.hh"
+#include "subcorp.hh"
 #include "dynattr.hh"
 #include <finlib/binfile.hh>
+#include <finlib/fromtof.hh>
+#include <finlib/fsop.hh>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
+#include <math.h>
+#include <iostream>
 
 using namespace std;
 
@@ -30,10 +36,14 @@ PosAttr *Corpus::setup_attr (const string &name)
             pa = createDynAttr (ao, path + name, name,
                                 get_attr (ao["FROMATTR"]));
         else if (virt)
-            pa = setup_virtposattr (virt, path + name, name);
+            pa = setup_virtposattr (virt, path + name, name, ao["LOCALE"],
+                                    conf->opts["ENCODING"]);
         else
             pa = createPosAttr (ao["TYPE"], path + name, name, ao["LOCALE"], 
                                 conf->opts["ENCODING"]);
+        if (!conf->opts ["SUBCPATH"].empty())
+            pa = createSubCorpPosAttr (pa, conf->opts ["SUBCPATH"],
+                                       ((SubCorpus*) this)->complement);
         attrs.push_back (pair<string,PosAttr*> (name, pa));
         return pa;
     } catch (CorpInfoNotFound) {
@@ -69,7 +79,7 @@ void Corpus::init (CorpInfo *ci)
         while (getline (as, cname, ',')) {
             if (cname.empty())
                 continue;
-            aligned.push_back(pair<string,Corpus*>(cname, NULL));
+            aligned.push_back (AlignedCorpus (cname));
         }
     }
     if (ci->opts["VIRTUAL"] != "")
@@ -100,8 +110,10 @@ Corpus::~Corpus ()
     delete conf;
     if (virt)
         delete virt;
-    for (int i = 0; i < aligned.size(); i++)
-        delete aligned [i].second;
+    for (unsigned i = 0; i < aligned.size(); i++) {
+        delete aligned[i].corp;
+        delete_TokenLevel (aligned[i].level);
+    }
 }
 
 PosAttr* Corpus::get_attr (const string &name)
@@ -166,6 +178,8 @@ string Corpus::get_info()
 PosAttr *findPosAttr (CorpInfo *ci, const string &attr_name)
 {
     string aname =  attr_name != "-" ? attr_name : ci->opts ["DEFAULTATTR"];
+    string orig_aname = aname;
+    string &virt = ci->opts["VIRTUAL"];
 
     int dotidx = aname.find ('.');
     if (dotidx >= 0) {
@@ -180,9 +194,10 @@ PosAttr *findPosAttr (CorpInfo *ci, const string &attr_name)
     if (ao["DYNAMIC"] != "")
         return createDynAttr (ao, path_aname, aname,
                               findPosAttr (ci, ao["FROMATTR"]), false);
-    else if (ci->opts["VIRTUAL"] != "")
-        return setup_virtposattr (setup_virtcorp (ci->opts["VIRTUAL"]), 
-                                  path_aname, aname, false);
+    else if (virt != "")
+        return setup_virtposattr (setup_virtcorp (virt),
+                                  path_aname, orig_aname, ao["LOCALE"],
+                                  ci->opts["ENCODING"], false);
     else
         return createPosAttr (ao["TYPE"], path_aname,
                               aname, ao["LOCALE"], ci->opts["ENCODING"]);
@@ -208,23 +223,7 @@ const string Corpus::get_sizes()
     return sizes;
 }
 
-NumOfPos Corpus::compute_docf(FastStream *poss, RangeStream *struc) {
-    Position end = 0, beg;
-    NumOfPos freq = 0;
-    while (!struc->end()) {
-        Position pos = poss->find(end);
-        if (poss->peek() >= poss->final()) {
-            break;
-        }
-        beg = struc->find_end(pos);
-        if (beg <= pos) {
-            freq++;
-            end = struc->peek_end() + 1;
-        } else {
-            end = struc->peek_beg();
-        }
-    }
-    return freq;
-}
+const char *manatee_version() {return MANATEE_VERSION_STR;}
+
 // vim: ts=4 sw=4 sta et sts=4 si cindent tw=80:
 

@@ -1,4 +1,3 @@
-//  $Id: lsclex.cc,v 2.1 2004-04-03 08:55:03 pary Exp $
 // Copyright (c) 2000-2003  Pavel Rychly
 
 #include "corpus.hh"
