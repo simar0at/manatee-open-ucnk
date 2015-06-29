@@ -206,6 +206,20 @@ void Concordance::extend_kwic_coll (int collnum)
     coll_count [collnum - 1] = 0;
 }
 
+/**
+ * Generates a random number from 0 to min(i, RAND_MAX).
+ * We assume that RAND_MAX is ~ max. available integer
+ * (see you stdlib.h for actual value).
+ */
+int custom_rand(int i) 
+{ 
+    srand(1298131);
+    return rand() % i;
+}
+
+/**
+ * Shuffles the concordance in a replicable way
+ */
 void Concordance::shuffle()
 {
     sync();
@@ -214,7 +228,7 @@ void Concordance::shuffle()
         for (ConcIndex i=0; i < size(); i++)
             (*view)[i] = i;
     }
-    random_shuffle(view->begin(), view->end());
+    random_shuffle(view->begin(), view->end(), custom_rand);
 }
 
 void Concordance::switch_aligned (const char *corpname)
