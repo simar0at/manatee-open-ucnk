@@ -29,6 +29,9 @@ public:
 class NotImplemented: public std::exception {
     std::string _what;
 public:
+    NotImplemented (const std::string msg) {
+        _what = msg;
+    }
     NotImplemented (const std::string func, const std::string file, int line) {
         std::stringstream ss;
         ss << func << " not implemented (" << file << ": " << line << ")";

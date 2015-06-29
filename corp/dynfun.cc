@@ -86,25 +86,7 @@ DynFun_base::DynFun_base (const char *libpath, const char *funname)
         throw CorpInfoNotFound(std::string("Cannot find internal function ")
                                + funname);
     } else {
-        int errors = 0;
-        /* Initialise libltdl. */
-        if (!initialized_libltdl) {
-            errors = lt_dlinit ();
-            initialized_libltdl = true;
-        }
-        /* Load the module. */
-        if (!errors)
-            module = lt_dlopenext (libpath);
-        if (module) {
-            fn = lt_dlsym (module, funname);
-            if (fn == NULL) {
-                fprintf(stderr, "Cannot load dynamic function %s: %s\n",
-                                funname, lt_dlerror());
-                errors = lt_dlclose (module);
-                module = NULL;
-            }
-        }
-        if (errors) fprintf (stderr, "%s\n", lt_dlerror());
+        throw NotImplemented("Dynamic external attributes are not supported.");
     }
 }
 
