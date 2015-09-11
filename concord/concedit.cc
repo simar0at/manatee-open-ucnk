@@ -54,7 +54,7 @@ void Concordance::reduce_lines (const char *crit)
             if (data->colls->at(i))
                 newcolls[i] = (collocitem*) malloc(newsize*sizeof(collocitem));
 
-        float process = size();
+        double process = size();
         Position oldl, newl;
         for (oldl=newl=0; oldl < size() && newl < newsize; oldl++, process--) {
             if (process * rand() / (RAND_MAX + 1.0) <= lines) {
